@@ -12,7 +12,7 @@ Objetivo:
 Mecânica do Backtest:
     - Iteração candle a candle sobre toda a base EURUSD H1
     - 1 posição aberta por vez por estratégia
-    - Spread fixo de 1.2 pips por operação
+    - Spread fixo de 0.6 pips por operação
     - Sem slippage adicional (conservador para H1)
     - Capital inicial: 10.000 USD
     - Risco por operação: 1% do capital atual (position sizing dinâmico)
@@ -82,7 +82,7 @@ PARQUET_OU       = DIR_PROJETO_V2 / "data" / "eurusd_h1_ou.parquet"
 # Parâmetros de Simulação
 CAPITAL_INICIAL    = 10_000.0   # USD
 RISCO_POR_TRADE    = 0.01       # 1% por trade
-SPREAD_PIPS        = 1.2        # Spread de 1.2 pips
+SPREAD_PIPS        = 0.6        # Spread de 0.6 pips
 VALOR_PIP_POR_LOTE = 10.0       # 10 USD por pip por lote padrão
 FATOR_PIPS         = 10_000.0   # 1 pip = 0.0001 no EURUSD
 
@@ -622,7 +622,6 @@ def gerar_grafico_equity_curves(
     mapa_visual = {
         "ZSCORE":    (COR_ZSCORE,    COR_DD_Z),
         "MOMENTUM":  (COR_MOMENTUM,  COR_DD_M),
-        "OU":        (COR_OU,        COR_DD_O),
         "COMBINADA": (COR_COMBINADA, COR_DD_C)
     }
     
@@ -753,19 +752,15 @@ def processar_pipeline_backtest():
     logger.info(f"Dados unificados com sucesso! {len(df):,} candles H1 no período de backtest.")
     
     # 3. Montar sinal combinado de portfólio
-    # Prioridade estrita: 1. OU -> 2. ZSCORE -> 3. MOMENTUM
+    # Prioridade estrita: 1. ZSCORE -> 2. MOMENTUM
     sinal_comb = np.zeros(len(df), dtype=np.int8)
-    origem_sinal = np.zeros(len(df), dtype=np.int8)  # 1 = OU, 2 = ZSCORE, 3 = MOMENTUM
+    origem_sinal = np.zeros(len(df), dtype=np.int8)  # 2 = ZSCORE, 3 = MOMENTUM
     
-    s_ou = df["sinal_ou"].values
     s_z = df["sinal_zscore"].values
     s_m = df["sinal_momentum"].values
     
     for i in range(len(df)):
-        if s_ou[i] != 0:
-            sinal_comb[i] = s_ou[i]
-            origem_sinal[i] = 1
-        elif s_z[i] != 0:
+        if s_z[i] != 0:
             sinal_comb[i] = s_z[i]
             origem_sinal[i] = 2
         elif s_m[i] != 0:
@@ -775,27 +770,24 @@ def processar_pipeline_backtest():
     df["sinal_combinado"] = sinal_comb
     df["origem_sinal"] = origem_sinal
     
-    n_ou_tot = (s_ou != 0).sum()
     n_z_tot = (s_z != 0).sum()
     n_m_tot = (s_m != 0).sum()
     n_comb_tot = (sinal_comb != 0).sum()
     
-    logger.info(f"Sinais na base: OU={n_ou_tot} | ZScore={n_z_tot} | Momentum={n_m_tot} | Combinada={n_comb_tot}")
+    logger.info(f"Sinais na base: ZScore={n_z_tot} | Momentum={n_m_tot} | Combinada={n_comb_tot}")
     
     # ── Simulações Individuais ──
     ops_z = simular_estrategia(df, "sinal_zscore", "ZSCORE", usar_zscore_exit=True)
     ops_m = simular_estrategia(df, "sinal_momentum", "MOMENTUM", usar_zscore_exit=False)
-    ops_o = simular_estrategia(df, "sinal_ou", "OU", usar_zscore_exit=False, usar_ou_exit=True)
     ops_c = simular_estrategia(df, "sinal_combinado", "COMBINADA", is_combinada=True)
     
     # ── Construção de Equity Curves ──
     eq_z = construir_equity_curve(ops_z, df.index)
     eq_m = construir_equity_curve(ops_m, df.index)
-    eq_o = construir_equity_curve(ops_o, df.index)
     eq_c = construir_equity_curve(ops_c, df.index)
     
-    equity_curves = {"ZSCORE": eq_z, "MOMENTUM": eq_m, "OU": eq_o, "COMBINADA": eq_c}
-    todas_operacoes = {"ZSCORE": ops_z, "MOMENTUM": ops_m, "OU": ops_o, "COMBINADA": ops_c}
+    equity_curves = {"ZSCORE": eq_z, "MOMENTUM": eq_m, "COMBINADA": eq_c}
+    todas_operacoes = {"ZSCORE": ops_z, "MOMENTUM": ops_m, "COMBINADA": ops_c}
     
     # ── Métricas Completas de Performance ──
     print(f"\n" + "█" * 70)
@@ -803,7 +795,7 @@ def processar_pipeline_backtest():
     print("█" * 70)
     
     todas_metricas = {}
-    for nome in ["ZSCORE", "MOMENTUM", "OU", "COMBINADA"]:
+    for nome in ["ZSCORE", "MOMENTUM", "COMBINADA"]:
         ops = todas_operacoes[nome]
         eq = equity_curves[nome]
         m = calcular_metricas_performance(ops, eq, nome)
@@ -815,18 +807,15 @@ def processar_pipeline_backtest():
     
     # ── Geração de Gráfico de Equity Curves ──
     caminhos_grafico = [
-        DIR_PROJETO_V1 / "graficos" / "equity_curves.png",
         DIR_PROJETO_V2 / "graficos" / "equity_curves.png"
     ]
     gerar_grafico_equity_curves(equity_curves, todas_operacoes, caminhos_grafico)
     
     # ── Gravação de Resultados ──
     caminhos_ops = [
-        DIR_PROJETO_V1 / "resultados" / "operacoes.csv",
         DIR_PROJETO_V2 / "resultados" / "operacoes.csv"
     ]
     caminhos_met = [
-        DIR_PROJETO_V1 / "resultados" / "metricas.csv",
         DIR_PROJETO_V2 / "resultados" / "metricas.csv"
     ]
     salvar_arquivos_resultados(todas_operacoes, todas_metricas, caminhos_ops, caminhos_met)

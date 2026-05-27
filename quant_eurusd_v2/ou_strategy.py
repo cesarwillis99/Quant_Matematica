@@ -274,7 +274,7 @@ def calcular_ou_rolling(df: pd.DataFrame, janela: int = 100) -> tuple:
 
 def calcular_gestao_risco(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Calcula a Volatilidade Realizada e define Stop Loss e Take Profit dinâmicos.
+    Calcula a Volatilidade Realizada e define Stop Loss E Take Profit dinâmicos.
     """
     logger.info("Calculando Volatilidade Realizada (janela=50)...")
     

@@ -144,8 +144,8 @@ def calcular_indicadores_momentum(df: pd.DataFrame) -> pd.DataFrame:
     # VR = std(log_retornos, janela=50, ddof=1)
     vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
     df["vr_pips"] = (vr * df["Close"] * 10000.0).astype("float32")
-    df["sl_pips"] = (1.5 * df["vr_pips"]).astype("float32")
-    df["tp_pips"] = (4.0 * df["vr_pips"]).astype("float32")
+    df["sl_pips"] = (2.0 * df["vr_pips"]).astype("float32")
+    df["tp_pips"] = (5.0 * df["vr_pips"]).astype("float32")
 
     return df
 
@@ -153,17 +153,18 @@ def calcular_indicadores_momentum(df: pd.DataFrame) -> pd.DataFrame:
 def gerar_sinais_momentum(df: pd.DataFrame) -> tuple:
     """
     Gera sinais operacionais LONG (+1), SHORT (-1) ou NEUTRO (0) sobre a janela operacional.
-    Calcula também as estatísticas de bloqueio.
+    Lógica otimizada (Opção A): Hurst > 0.50, Entropia < 0.60 e Aceleração > 75% ou < 25%.
     """
-    logger.info("Executando motor de geração de sinais...")
+    logger.info("Executando motor de geração de sinais Momentum otimizado (Opção A)...")
     
     # 1. Filtro de Janela Operacional (10h00-22h30, seg-sex)
     op_window = verificar_janela_operacional(df.index)
 
     # 2. Pré-condições Operacionais
-    c1_regime = (df["regime"] == "TENDENCIA")
+    # Usamos o Hurst > 0.50 diretamente do parquet
+    c1_regime = (df["hurst"] > 0.50)
     c2_entropia_operavel = (df["entropia_shannon"] < 0.60)
-    c3_ruido_block = (df["entropia_shannon"] <= 0.80)  # Se > 0.80 bloqueia
+    c3_ruido_block = (df["entropia_shannon"] <= 0.80)
     
     # Triplo Filtro Operacional
     condicao_entrada = c1_regime & c2_entropia_operavel & c3_ruido_block & op_window
@@ -171,19 +172,19 @@ def gerar_sinais_momentum(df: pd.DataFrame) -> tuple:
     sinal = np.zeros(len(df), dtype=np.int8)
 
     # LONG (+1)
-    cond_long = condicao_entrada & (df["percentil_acel"] > 0.70) & (df["velocidade"] > 0.0)
+    cond_long = condicao_entrada & (df["percentil_acel"] > 0.75) & (df["velocidade"] > 0.0)
     sinal[cond_long] = 1
 
     # SHORT (-1)
-    cond_short = condicao_entrada & (df["percentil_acel"] < 0.30) & (df["velocidade"] < 0.0)
+    cond_short = condicao_entrada & (df["percentil_acel"] < 0.25) & (df["velocidade"] < 0.0)
     sinal[cond_short] = -1
 
     df["sinal_momentum"] = sinal
 
     # --- Estatísticas de Bloqueio ---
     # Sinais potenciais com cinemática alinhada e sob regime de tendência
-    potencial_long = c1_regime & (df["percentil_acel"] > 0.70) & (df["velocidade"] > 0.0)
-    potencial_short = c1_regime & (df["percentil_acel"] < 0.30) & (df["velocidade"] < 0.0)
+    potencial_long = c1_regime & (df["percentil_acel"] > 0.75) & (df["velocidade"] > 0.0)
+    potencial_short = c1_regime & (df["percentil_acel"] < 0.25) & (df["velocidade"] < 0.0)
     potencial = potencial_long | potencial_short
 
     # Bloqueados apenas pelo fuso/janela de horário
