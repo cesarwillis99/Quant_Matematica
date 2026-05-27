@@ -7,22 +7,19 @@ data_loader.py — Módulo de Carregamento e Pré-Processamento de Dados EURUSD
 
 Objetivo:
     Carregar o arquivo CSV bruto exportado do MetaTrader 5 em timeframe M1,
-    aplicar o filtro correto de horário do mercado FOREX (dom 21h → sex 21h UTC),
+    aplicar o filtro correto de horário do servidor
+    MT5 (seg-sex 00h05-23h55, horário do servidor
+    UTC+2/UTC+3 com DST auto-ajustado),
     agregar para H1, calcular log-retornos e salvar em formato Parquet.
 
-Correção crítica em relação à v1:
-    A versão anterior removia barras noturnas ANTES de salvar o parquet,
-    fazendo com que stops e targets atingidos durante a madrugada não
-    fossem capturados no backtest — gerando resultados irreais e otimistas.
-
 Saídas:
-    1. eurusd_h1_completo.parquet     — Série 24h completa (dom 21h → sex 21h)
-       Uso: cálculo de indicadores + monitoramento de stops/targets
-    2. eurusd_h1_operacional.parquet  — Apenas 07h-20h UTC, seg-sex
-       Uso: geração de sinais de entrada (evita baixa liquidez)
+    1. eurusd_h1_completo.parquet     — Série completa seg-sex 00h05-23h55
+       Uso: cálculo de indicadores + monitoramento de stops/targets incluindo madrugada
+    2. eurusd_h1_operacional.parquet  — Apenas 10h00-22h30, seg-sex
+       Uso: geração de sinais de entrada
 
 Autor: Quant Matemática Trade
-Data:  2026-05-26
+Data:  2026-05-27
 ================================================================================
 """
 
@@ -111,73 +108,79 @@ DIAS_SEMANA = {
 
 
 # =============================================================================
-# FILTRO DE MERCADO FOREX — JANELA CORRETA DOM 21H → SEX 21H UTC
+# FILTRO DE HORÁRIOS EURUSD (SÉRIE COMPLETA E OPERACIONAL)
 # =============================================================================
-def filtro_mercado_forex(df: pd.DataFrame) -> pd.DataFrame:
+def filtro_serie_completa(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Aplica o filtro de horário do mercado FOREX spot.
+    Filtra a série completa para o horário real de
+    funcionamento do EURUSD no servidor MT5.
 
-    Estrutura real do mercado FOREX:
-        ABERTURA:    domingo às 21h00 UTC (Sydney)
-        FECHAMENTO:  sexta-feira às 21h59 UTC (New York)
+    O servidor MT5 está em UTC+2/UTC+3 (europeu).
+    O EURUSD opera de segunda a sexta: 00h05 até 23h55.
+    Domingo e sábado não existem na base (sem cotações).
 
-    Mantém:
-        - Domingo:   apenas 21h00-23h59 UTC (abertura Sydney)
-        - Seg-Qui:   00h00-23h59 UTC (24h completas)
-        - Sexta:     00h00-21h59 UTC (até fechamento NY)
-
-    Remove:
-        - Sábado:    TODOS os candles (mercado fechado)
-        - Domingo:   00h00-20h59 UTC (antes da abertura)
-        - Sexta:     22h00-23h59 UTC (após fechamento)
+    Esta série é usada para:
+    - Cálculo de todos os indicadores (Hurst, OU, etc.)
+    - Monitoramento de stops e targets 24h
+    - Captura de movimentos na madrugada que podem
+      acionar stops de posições abertas durante o dia
 
     Parâmetros:
-        df: DataFrame com índice DatetimeIndex em UTC
+        df: DataFrame com índice DatetimeIndex naive
+            no horário do servidor MT5
 
     Retorna:
-        DataFrame filtrado contendo apenas candles dentro da janela FOREX
+        DataFrame com apenas candles de seg-sex,
+        entre 00h05 e 23h55 no horário do servidor
     """
-    weekday = df.index.weekday  # 0=Seg, 1=Ter, ..., 4=Sex, 5=Sáb, 6=Dom
-    hour    = df.index.hour
+    weekday = df.index.weekday  # 0=Seg...4=Sex, 5=Sáb, 6=Dom
+    hora    = df.index.strftime('%H:%M')
 
-    # Domingo: apenas 21h-23h (abertura Sydney)
-    domingo_valido = (weekday == 6) & (hour >= 21)
+    # Segunda a Sexta (0-4): 00h05 até 23h55
+    dias_uteis = (weekday >= 0) & (weekday <= 4)
+    horario_ok = (hora >= "00:05") & (hora <= "23:55")
 
-    # Segunda a Quinta: 24h completas
-    seg_qui_valido = (weekday >= 0) & (weekday <= 3)
-
-    # Sexta: apenas 00h-21h (até fechamento NY)
-    sexta_valida = (weekday == 4) & (hour <= 21)
-
-    # Sábado: nada (weekday == 5 não está em nenhuma máscara)
-    # Domingo antes das 21h: nada (não atende domingo_valido)
-
-    mascara = domingo_valido | seg_qui_valido | sexta_valida
+    # Sábado (5) e Domingo (6): não existem na base
+    # mas o filtro garante que se existirem são removidos
+    mascara = dias_uteis & horario_ok
     return df[mascara]
 
 
 def filtro_horario_operacional(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Filtra candles para o horário operacional onde NOVAS POSIÇÕES podem ser abertas.
+    Filtra candles para o horário operacional onde
+    NOVAS POSIÇÕES podem ser abertas.
 
-    Horário operacional: 07h00 UTC até 20h59 UTC, segunda a sexta.
-    Exclui: madrugada (00h-06h), domingo, sexta noite (21h+).
+    Horário operacional: 10h00 até 22h30 no horário
+    do servidor MT5 (UTC+2/UTC+3), segunda a sexta.
 
-    Este filtro é mais restritivo que o filtro_mercado_forex e é usado
-    APENAS para gerar sinais de entrada — nunca para cálculo de indicadores
-    ou monitoramento de stops/targets.
+    Justificativa:
+    - 10h00 servidor = início da liquidez europeia
+    - 22h30 servidor = margem de 30min antes do
+      fechamento forçado das 23h00
+    - Madrugada (00h05-09h59): sem novas entradas
+      mas posições abertas continuam monitoradas
+      na série completa
+
+    Este filtro é usado APENAS para geração de
+    sinais de entrada. Stops e targets são sempre
+    monitorados sobre a série completa 00h05-23h55.
 
     Parâmetros:
-        df: DataFrame com índice DatetimeIndex em UTC
+        df: DataFrame com índice DatetimeIndex naive
+            no horário do servidor MT5
 
     Retorna:
-        DataFrame contendo apenas candles no horário operacional
+        DataFrame com apenas candles operacionais
     """
     weekday = df.index.weekday
-    hour    = df.index.hour
+    hora    = df.index.strftime('%H:%M')
 
-    # Segunda a Sexta (0-4), entre 07h e 20h
-    mascara = (weekday >= 0) & (weekday <= 4) & (hour >= 7) & (hour <= 20)
+    # Segunda a Sexta (0-4), entre 10h00 e 22h30
+    dias_uteis = (weekday >= 0) & (weekday <= 4)
+    horario_op = (hora >= "10:00") & (hora <= "22:30")
+
+    mascara = dias_uteis & horario_op
     return df[mascara]
 
 
@@ -192,7 +195,7 @@ def carregar_csv_bruto(csv_path: Path) -> pd.DataFrame:
         csv_path: Caminho do arquivo CSV
 
     Retorna:
-        DataFrame com dados M1 brutos, índice datetime UTC
+        DataFrame com dados M1 brutos, índice datetime naive no horário do servidor
     """
     if not csv_path.exists():
         raise FileNotFoundError(
@@ -218,11 +221,14 @@ def carregar_csv_bruto(csv_path: Path) -> pd.DataFrame:
     total_bruto = len(df)
     logger.info(f"CSV carregado: {total_bruto:,} registros M1")
 
-    # Passo 2 — Parser de datetime com timezone UTC
-    logger.info("Processando índice datetime UTC...")
+    # Passo 2 — Parser de datetime naive (sem timezone)
+    logger.info("Processando índice datetime naive...")
     datas_str = df["Date"].str.replace(".", "-", regex=False) + " " + df["Time"]
     df.index = pd.to_datetime(datas_str, format="%Y-%m-%d %H:%M")
-    df.index = df.index.tz_localize("UTC")
+    # Timestamps já estão no horário do servidor MT5
+    # (UTC+2/UTC+3 com DST auto-ajustado pelo MT5)
+    # Manter como naive — sem localização de timezone
+    # para evitar distorções nos filtros de horário
     df.index.name = "Datetime"
 
     # Remover colunas auxiliares de data/hora
@@ -240,22 +246,22 @@ def carregar_csv_bruto(csv_path: Path) -> pd.DataFrame:
 
 def limpar_dados_m1(df: pd.DataFrame) -> dict:
     """
-    Passos 4-6 — Aplica filtro FOREX, remove candles zerados e verifica integridade OHLC.
+    Passos 4-6 — Aplica filtro série completa, remove candles zerados e verifica integridade OHLC.
 
     Parâmetros:
-        df: DataFrame M1 com índice datetime UTC
+        df: DataFrame M1 com índice datetime naive
 
     Retorna:
         Tupla (DataFrame limpo, dicionário com estatísticas de remoção)
     """
     stats_remocao = {}
 
-    # Passo 4 — Aplicar filtro_mercado_forex()
-    total_antes_forex = len(df)
-    df = filtro_mercado_forex(df)
-    removidos_forex = total_antes_forex - len(df)
-    stats_remocao["removidos_filtro_forex"] = removidos_forex
-    logger.info(f"Filtro FOREX: {removidos_forex:,} candles removidos (fora da janela dom 21h → sex 21h)")
+    # Passo 4 — Aplicar filtro_serie_completa()
+    total_antes_completa = len(df)
+    df = filtro_serie_completa(df)
+    removidos_completa = total_antes_completa - len(df)
+    stats_remocao["removidos_filtro_completa"] = removidos_completa
+    logger.info(f"Filtro Série Completa: {removidos_completa:,} candles removidos (fora de seg-sex 00h05-23h55)")
 
     # Passo 5 — Remover candles com OHLC zerado ou nulo
     total_antes_zero = len(df)
@@ -366,8 +372,8 @@ def executar_verificacoes(df_completo: pd.DataFrame, df_operacional: pd.DataFram
     Executa 10 verificações automáticas sobre as séries geradas.
 
     Parâmetros:
-        df_completo:     DataFrame da série completa (dom 21h → sex 21h)
-        df_operacional:  DataFrame da série operacional (07h-20h seg-sex)
+        df_completo:     DataFrame da série completa
+        df_operacional:  DataFrame da série operacional
 
     Retorna:
         True se todos os checks passaram, False caso contrário
@@ -378,35 +384,34 @@ def executar_verificacoes(df_completo: pd.DataFrame, df_operacional: pd.DataFram
 
     todos_ok = True
 
-    # ─── CHECK 1: Nenhum candle de sábado na série completa ───
-    sabados = df_completo[df_completo.index.weekday == 5]
-    ok = len(sabados) == 0
+    # ─── CHECK 1: Nenhum candle de sábado ou domingo na base ───
+    fds = df_completo[df_completo.index.weekday >= 5]
+    ok = len(fds) == 0
     status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"\n  CHECK 1  │ Nenhum candle de sábado na série completa")
-    print(f"           │ {status} — {len(sabados)} candles de sábado encontrados")
+    print(f"\n  CHECK 1  │ Nenhum candle de sábado ou domingo na base")
+    print(f"           │ {status} — {len(fds)} candles encontrados")
     if not ok:
         todos_ok = False
-        print(f"           │ Primeiros 5: {sabados.index[:5].tolist()}")
+        print(f"           │ Primeiros 5: {fds.index[:5].tolist()}")
 
-    # ─── CHECK 2: Nenhum candle domingo antes das 21h UTC ───
-    domingos_cedo = df_completo[
-        (df_completo.index.weekday == 6) & (df_completo.index.hour < 21)
-    ]
-    ok = len(domingos_cedo) == 0
+    # ─── CHECK 2: Nenhum candle de domingo na base ───
+    domingos = df_completo[df_completo.index.weekday == 6]
+    ok = len(domingos) == 0
     status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"\n  CHECK 2  │ Nenhum candle domingo antes das 21h UTC")
-    print(f"           │ {status} — {len(domingos_cedo)} candles encontrados")
+    print(f"\n  CHECK 2  │ Nenhum candle de domingo na base")
+    print(f"           │ {status} — {len(domingos)} candles de domingo encontrados")
     if not ok:
         todos_ok = False
 
-    # ─── CHECK 3: Nenhum candle sexta após 21h UTC ───
-    sexta_tarde = df_completo[
-        (df_completo.index.weekday == 4) & (df_completo.index.hour > 21)
-    ]
-    ok = len(sexta_tarde) == 0
+    # ─── CHECK 3: Nenhum candle fora de 00h05-23h55 na série completa ───
+    # Em H1, o candle das 00h00 representa o período de 00h05 a 00h59 do M1 (que é válido).
+    # A série completa H1 deve ter apenas candles com minutos zerados no intervalo de 00h a 23h.
+    minutos_quebrados = df_completo[df_completo.index.minute != 0]
+    horas_invalidas = df_completo[(df_completo.index.hour < 0) | (df_completo.index.hour > 23)]
+    ok = len(minutos_quebrados) == 0 and len(horas_invalidas) == 0
     status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"\n  CHECK 3  │ Nenhum candle sexta após 21h UTC")
-    print(f"           │ {status} — {len(sexta_tarde)} candles encontrados")
+    print(f"\n  CHECK 3  │ Nenhum candle fora de 00h05-23h55 na série completa")
+    print(f"           │ {status} — Minutos quebrados: {len(minutos_quebrados)}, Horas inválidas: {len(horas_invalidas)}")
     if not ok:
         todos_ok = False
 
@@ -466,34 +471,31 @@ def executar_verificacoes(df_completo: pd.DataFrame, df_operacional: pd.DataFram
     if not ok:
         todos_ok = False
 
-    # ─── CHECK 9: Série operacional contém apenas 07h-20h UTC ───
-    horas_op = df_operacional.index.hour
-    fora_horario = df_operacional[(horas_op < 7) | (horas_op > 20)]
+    # ─── CHECK 9: Série operacional contém apenas 10h00-22h30 no horário do servidor ───
+    horas_minutos_op = df_operacional.index.strftime('%H:%M')
+    fora_horario = df_operacional[(horas_minutos_op < "10:00") | (horas_minutos_op > "22:30")]
     dias_op = df_operacional.index.weekday
     fora_dia = df_operacional[(dias_op > 4)]  # Sábado ou Domingo
     ok = (len(fora_horario) == 0) and (len(fora_dia) == 0)
     status = "✅ PASS" if ok else "❌ FAIL"
-    print(f"\n  CHECK 9  │ Série operacional contém apenas 07h-20h UTC, seg-sex")
+    print(f"\n  CHECK 9  │ Série operacional contém apenas 10h00-22h30 no horário do servidor, seg-sex")
     print(f"           │ {status} — Fora do horário: {len(fora_horario)}, Fora do dia: {len(fora_dia)}")
     if not ok:
         todos_ok = False
 
     # ─── CHECK 10: Continuidade temporal — gaps > 3h na série completa ───
-    # Excluindo transição de fim de semana (sex 21h → dom 21h)
+    # Excluindo transição de fim de semana (sex 23h55 → seg 00h05, normalmente ~48-50h)
     print(f"\n  CHECK 10 │ Continuidade temporal — gaps > 3h (excl. fim de semana)")
     if len(df_completo) > 1:
         diffs = pd.Series(df_completo.index[1:]) - pd.Series(df_completo.index[:-1])
         gaps_grandes = diffs[diffs > pd.Timedelta(hours=3)]
 
-        # Filtrar gaps de fim de semana (sex → dom ou sex → seg, normalmente ~47-51h)
+        # Filtrar gaps de fim de semana (sex → seg, normalmente ~47-51h)
         gaps_nao_fds = []
         for i, gap in gaps_grandes.items():
             dt_antes = df_completo.index[i]
             dt_depois = df_completo.index[i + 1]
-            # Se o gap cruza de sexta para domingo, é fim de semana normal
-            if dt_antes.weekday() == 4 and dt_depois.weekday() == 6:
-                continue
-            # Se o gap cruza de sexta para segunda (broker sem dados de domingo)
+            # Se o gap cruza de sexta para segunda
             if dt_antes.weekday() == 4 and dt_depois.weekday() == 0:
                 continue
             gaps_nao_fds.append({
@@ -539,7 +541,7 @@ def imprimir_relatorio(
 
     Parâmetros:
         total_bruto:           Registros M1 no CSV original
-        stats_remocao:         Estatísticas de remoção (filtro FOREX, OHLC, etc.)
+        stats_remocao:         Estatísticas de remoção (filtro de horário, OHLC, etc.)
         removidos_incompletos: Candles H1 removidos por incompletude
         df_completo:           DataFrame da série completa
         df_operacional:        DataFrame da série operacional
@@ -553,39 +555,38 @@ def imprimir_relatorio(
     print("  SEÇÃO 1 — DADOS BRUTOS")
     print(sep)
     print(f"  Total de registros M1 no CSV         : {total_bruto:>12,}")
-    print(f"  Período coberto                       : {df_completo.index.min().strftime('%Y-%m-%d %H:%M')} UTC")
-    print(f"                                       → {df_completo.index.max().strftime('%Y-%m-%d %H:%M')} UTC")
-    print(f"  Removidos por filtro FOREX            : {stats_remocao.get('removidos_filtro_forex', 0):>12,}")
+    print(f"  Período coberto                       : {df_completo.index.min().strftime('%Y-%m-%d %H:%M')}")
+    print(f"                                       → {df_completo.index.max().strftime('%Y-%m-%d %H:%M')}")
+    print(f"  Removidos por filtro série completa   : {stats_remocao.get('removidos_filtro_completa', 0):>12,}")
     print(f"  Removidos por OHLC zerado/nulo        : {stats_remocao.get('removidos_zerado_nulo', 0):>12,}")
     print(f"  Removidos por integridade OHLC        : {stats_remocao.get('removidos_integridade', 0):>12,}")
     print(f"  Removidos por candle H1 incompleto    : {removidos_incompletos:>12,}")
 
     # ═══════════════════════════════════════════════════════════════════
-    # SEÇÃO 2 — Série completa (eurusd_h1_completo)
+    # SEÇÃO 2 — Série completa (eurusd_h1_completo.parquet)
     # ═══════════════════════════════════════════════════════════════════
     print(f"\n{sep}")
     print("  SEÇÃO 2 — SÉRIE COMPLETA (eurusd_h1_completo.parquet)")
     print(sep)
     print(f"  Total de candles H1                   : {len(df_completo):>12,}")
-    print(f"  Período coberto                       : {df_completo.index.min().strftime('%Y-%m-%d %H:%M')} UTC")
-    print(f"                                       → {df_completo.index.max().strftime('%Y-%m-%d %H:%M')} UTC")
+    print(f"  Período coberto                       : {df_completo.index.min().strftime('%Y-%m-%d %H:%M')}")
+    print(f"                                       → {df_completo.index.max().strftime('%Y-%m-%d %H:%M')}")
 
-    # Breakdown por dia da semana
-    print(f"\n  Breakdown por dia da semana:")
-    for wd in [6, 0, 1, 2, 3, 4, 5]:  # Dom, Seg, Ter, Qua, Qui, Sex, Sáb
-        count = (df_completo.index.weekday == wd).sum()
-        nome = DIAS_SEMANA[wd]
-        extra = " (21h+)" if wd == 6 else " (até 21h)" if wd == 4 else ""
-        print(f"    {nome:10s}{extra:12s}: {count:>8,} candles")
+    # Breakdown por hora do dia
+    print(f"\n  Breakdown por hora do dia (00h-23h):")
+    for h in range(24):
+        count = (df_completo.index.hour == h).sum()
+        print(f"    {h:02d}h : {count:>8,} candles")
 
     # Confirmações
     sabados = (df_completo.index.weekday == 5).sum()
-    dom_cedo = ((df_completo.index.weekday == 6) & (df_completo.index.hour < 21)).sum()
-    sex_tarde = ((df_completo.index.weekday == 4) & (df_completo.index.hour > 21)).sum()
+    domingos = (df_completo.index.weekday == 6).sum()
+    # Em H1, todos os candles de 00h a 23h são válidos (00h representa 00h05-00h59 do M1)
+    fora_janela = (df_completo.index.minute != 0).sum()
     print(f"\n  Confirmações:")
     print(f"    Candles de sábado              : {sabados:>6} {'✅' if sabados == 0 else '❌'}")
-    print(f"    Candles domingo antes das 21h  : {dom_cedo:>6} {'✅' if dom_cedo == 0 else '❌'}")
-    print(f"    Candles sexta após 21h         : {sex_tarde:>6} {'✅' if sex_tarde == 0 else '❌'}")
+    print(f"    Candles de domingo             : {domingos:>6} {'✅' if domingos == 0 else '❌'}")
+    print(f"    Candles fora de 00h05-23h55    : {fora_janela:>6} {'✅' if fora_janela == 0 else '❌'}")
 
     # Estatísticas dos log-retornos
     lr = df_completo["log_return"]
@@ -598,33 +599,28 @@ def imprimir_relatorio(
     print(f"    Máximo                         : {lr.max():>12.8f}")
 
     # ═══════════════════════════════════════════════════════════════════
-    # SEÇÃO 3 — Série operacional (eurusd_h1_operacional)
+    # SEÇÃO 3 — Série operacional (eurusd_h1_operacional.parquet)
     # ═══════════════════════════════════════════════════════════════════
     print(f"\n{sep}")
     print("  SEÇÃO 3 — SÉRIE OPERACIONAL (eurusd_h1_operacional.parquet)")
     print(sep)
     print(f"  Total de candles H1                   : {len(df_operacional):>12,}")
-    print(f"  Período coberto                       : {df_operacional.index.min().strftime('%Y-%m-%d %H:%M')} UTC")
-    print(f"                                       → {df_operacional.index.max().strftime('%Y-%m-%d %H:%M')} UTC")
+    print(f"  Período coberto                       : {df_operacional.index.min().strftime('%Y-%m-%d %H:%M')}")
+    print(f"                                       → {df_operacional.index.max().strftime('%Y-%m-%d %H:%M')}")
 
-    # Breakdown por hora do dia
-    print(f"\n  Breakdown por hora UTC (07h-20h):")
-    for h in range(7, 21):
+    # Breakdown por hora do dia (10h-22h)
+    print(f"\n  Breakdown por hora do servidor (10h-22h):")
+    for h in range(10, 23):
         count = (df_operacional.index.hour == h).sum()
-        print(f"    {h:02d}h UTC : {count:>8,} candles")
+        print(f"    {h:02d}h : {count:>8,} candles")
 
     # Confirmações
-    fora_horario = df_operacional[
-        (df_operacional.index.hour < 7) | (df_operacional.index.hour > 20)
-    ]
+    hora_str_op = df_operacional.index.strftime('%H:%M')
+    fora_horario = df_operacional[(hora_str_op < "10:00") | (hora_str_op > "22:30")]
     fds_op = df_operacional[df_operacional.index.weekday >= 5]
-    sex_21_op = df_operacional[
-        (df_operacional.index.weekday == 4) & (df_operacional.index.hour > 20)
-    ]
     print(f"\n  Confirmações:")
-    print(f"    Candles fora de 07h-20h UTC    : {len(fora_horario):>6} {'✅' if len(fora_horario) == 0 else '❌'}")
+    print(f"    Candles fora de 10h00-22h30    : {len(fora_horario):>6} {'✅' if len(fora_horario) == 0 else '❌'}")
     print(f"    Candles sáb/dom                : {len(fds_op):>6} {'✅' if len(fds_op) == 0 else '❌'}")
-    print(f"    Candles sexta após 20h         : {len(sex_21_op):>6} {'✅' if len(sex_21_op) == 0 else '❌'}")
 
     # ═══════════════════════════════════════════════════════════════════
     # SEÇÃO 4 — Validação cruzada
@@ -643,8 +639,9 @@ def imprimir_relatorio(
     print(f"  Diferença em candles                  : {diferenca:>12,}")
 
     pct_noturnos = (diferenca / len(df_completo)) * 100 if len(df_completo) > 0 else 0
-    print(f"  % candles noturnos (só na completa)   : {pct_noturnos:>11.2f}%")
-    print(f"  (candles capturados para stops/targets que a v1 ignorava)")
+    print(f"  % candles fora do horário operacional : {pct_noturnos:>11.2f}%")
+    print(f"  (madrugada 00h05-09h59 + noite 22h31-23h55)")
+    print(f"  capturados apenas na série completa para monitoramento de stops/targets")
 
 
 # =============================================================================
@@ -659,9 +656,9 @@ def carregar_e_processar(
 
     Pipeline:
         1. Carrega CSV bruto do MetaTrader 5
-        2. Parseia datetime com timezone UTC
+        2. Parseia datetime como naive
         3. Remove duplicatas de índice
-        4. Aplica filtro de mercado FOREX (dom 21h → sex 21h)
+        4. Aplica filtro de série completa (seg-sex 00h05-23h55)
         5. Remove candles com OHLC zerado ou nulo
         6. Verifica integridade OHLC (High >= max(O,C), Low <= min(O,C))
         7. Agrega M1 → H1 via resample
@@ -707,7 +704,7 @@ def carregar_e_processar(
     # ═══════════════════════════════════════════════════════════════════
     print("\n" + "═" * 70)
     print("  DATA LOADER v2 — PIPELINE DE PROCESSAMENTO")
-    print("  EURUSD M1 → H1 (Série Completa 24h FOREX)")
+    print("  EURUSD M1 → H1 (Série Completa seg-sex 00h05-23h55)")
     print("═" * 70)
 
     # Passo 1-3: Carregar e parsear CSV
@@ -729,10 +726,10 @@ def carregar_e_processar(
     # GERAR OS DOIS PARQUETS
     # ═══════════════════════════════════════════════════════════════════
 
-    # ARQUIVO A — Série completa (dom 21h → sex 21h, 24h)
+    # ARQUIVO A — Série completa (seg-sex 00h05-23h55)
     df_completo = df_h1.copy()
 
-    # ARQUIVO B — Série operacional (07h-20h, seg-sex)
+    # ARQUIVO B — Série operacional (10h00-22h30, seg-sex)
     df_operacional = filtro_horario_operacional(df_completo)
 
     # ═══════════════════════════════════════════════════════════════════
@@ -807,7 +804,7 @@ def carregar_serie_completa() -> pd.DataFrame:
 def carregar_serie_operacional() -> pd.DataFrame:
     """
     Carrega a série operacional H1 do parquet.
-    Uso: geração de sinais de entrada (07h-20h UTC, seg-sex).
+    Uso: geração de sinais de entrada (10h00-22h30, seg-sex).
 
     Retorna:
         DataFrame com série operacional H1
@@ -853,8 +850,8 @@ Exemplos de uso:
     print("\n" + "█" * 70)
     print("█" + " " * 68 + "█")
     print("█   DATA LOADER v2 — EURUSD M1 → H1                               █")
-    print("█   Série Completa 24h FOREX (Dom 21h UTC → Sex 21h UTC)           █")
-    print("█   Correção: Mantém barras noturnas para stops/targets reais      █")
+    print("█   Série Completa: Seg-Sex 00h05-23h55 (Servidor MT5)            █")
+    print("█   Série Operacional: 10h00-22h30 (Servidor MT5)                 █")
     print("█" + " " * 68 + "█")
     print("█" * 70)
 

@@ -8,16 +8,16 @@ data_loader.py — Módulo de Carregamento e Pré-Processamento de Dados NASDAQ
 Objetivo:
     Carregar o arquivo CSV bruto exportado do MetaTrader 5 (M1 ou M10),
     detectar timeframe, agregar para M10 (se necessário), aplicar filtros
-    intraday para a sessão americana, excluir feriados, e salvar em Parquet.
+    intraday para a sessão completa, e salvar em Parquet.
 
 Regras de Negócio (Horário do Servidor MT5):
-    - Sessão Completa (Indicadores/Stops): 16h30 às 23h00
-    - Sessão Operacional (Entradas): 16h30 às 22h30
-    - Dias: Segunda a Sexta (excluindo feriados americanos)
+    - Sessão Completa (Indicadores/Stops): Segunda a Sexta 01h05 às 23h50
+    - Sessão Operacional (Entradas): Segunda a Sexta 16h30 às 22h30
+    - Dias: Segunda a Sexta (feriados mantidos - liquidez reduzida)
     - Log-retornos: Não cruzam dias (resetam na abertura)
 
 Saídas:
-    1. nasdaq_m10_completo.parquet     — Série intraday completa (16h30-23h00)
+    1. nasdaq_m10_completo.parquet     — Série intraday completa (01h05-23h50)
     2. nasdaq_m10_operacional.parquet  — Série operacional (16h30-22h30)
 
 ================================================================================
@@ -32,11 +32,6 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 from tqdm import tqdm
-from pandas.tseries.holiday import (
-    AbstractHolidayCalendar, Holiday, nearest_workday,
-    USMartinLutherKingJr, USPresidentsDay, USMemorialDay,
-    USLaborDay, USThanksgivingDay
-)
 
 # Suprimir warnings desnecessários
 warnings.filterwarnings("ignore")
@@ -97,21 +92,8 @@ DTYPES_CSV = {
     "RealVolume": "int32",
 }
 
-# =============================================================================
-# CALENDÁRIO DE FERIADOS AMERICANOS
-# =============================================================================
-class USMarketHolidayCalendar(AbstractHolidayCalendar):
-    """Calendário de Feriados Americanos para o NASDAQ."""
-    rules = [
-        Holiday('Ano Novo', month=1, day=1, observance=nearest_workday),
-        USMartinLutherKingJr,
-        USPresidentsDay,
-        USMemorialDay,
-        Holiday('Independência EUA', month=7, day=4, observance=nearest_workday),
-        USLaborDay,
-        USThanksgivingDay,
-        Holiday('Natal', month=12, day=25, observance=nearest_workday)
-    ]
+# Feriados americanos: mantidos na base pois o US100 CFD opera com liquidez reduzida
+# nessas datas. Identificar via gaps de volume se necessário.
 
 # =============================================================================
 # FUNÇÕES DO PIPELINE
@@ -157,8 +139,19 @@ def carregar_csv_bruto(csv_path: Path) -> pd.DataFrame:
     return df, total_bruto
 
 
+def filtro_serie_completa(df):
+    weekday = df.index.weekday  # 0=Seg...6=Dom
+    hora    = df.index.strftime('%H:%M')
+    
+    # Segunda a Sexta (0-4): 01h05 até 23h50
+    dias_uteis = (weekday >= 0) & (weekday <= 4)
+    horario_ok = (hora >= "01:05") & (hora <= "23:50")
+    
+    return df[dias_uteis & horario_ok]
+
+
 def processar_timeframe_e_horario(df: pd.DataFrame) -> tuple:
-    """Passo 4, 5 e 6 — Detectar timeframe, agregar, filtrar horários e feriados."""
+    """Passo 4 e 5 — Detectar timeframe, agregar e filtrar horários (série completa)."""
     stats = {}
     
     # Passo 4 — Detectar timeframe e agregar
@@ -195,26 +188,10 @@ def processar_timeframe_e_horario(df: pd.DataFrame) -> tuple:
         stats['removidos_incompletos'] = 0
         logger.info(f"Timeframe {stats['timeframe']} detectado. Usando diretamente.")
 
-    # Passo 5 — Filtrar dias da semana (Segunda a Sexta = 0 a 4)
-    # A série completa deve manter 24h para o cálculo contínuo dos indicadores
-    weekday = df.index.weekday
-    mascara_dias = (weekday >= 0) & (weekday <= 4)
-    
+    # Passo 5 — Filtrar para série completa (Segunda a Sexta, 01h05 até 23h50)
     antes = len(df)
-    df = df[mascara_dias]
-    stats['removidos_fora_horario'] = antes - len(df)  # Basicamente removeu fins de semana
-    
-    # Passo 6 — Remover feriados americanos
-    cal = USMarketHolidayCalendar()
-    feriados = cal.holidays(start=df.index.min(), end=df.index.max())
-    stats['feriados_removidos_lista'] = [f.strftime('%Y-%m-%d') for f in feriados if f.date() in df.index.date]
-    
-    antes = len(df)
-    df = df[~df.index.normalize().isin(feriados)]
-    stats['removidos_feriados'] = antes - len(df)
-    
-    if stats['removidos_feriados'] > 0:
-        logger.info(f"Removidos {stats['removidos_feriados']} candles por conta de feriados americanos.")
+    df = filtro_serie_completa(df)
+    stats['removidos_fora_horario'] = antes - len(df)
         
     return df, stats
 
@@ -248,18 +225,21 @@ def limpar_dados_e_calcular_retornos(df: pd.DataFrame) -> tuple:
 
 
 def executar_verificacoes(df_completo: pd.DataFrame, df_operacional: pd.DataFrame):
-    """Executa os 10 checks de validação e imprime resultado."""
+    """Executa os 9 checks de validação e imprime resultado."""
     print("\n" + "═" * 70)
-    print("  VERIFICAÇÕES AUTOMÁTICAS (10 CHECKS) - NASDAQ")
+    print("  VERIFICAÇÕES AUTOMÁTICAS (9 CHECKS) - NASDAQ")
     print("═" * 70)
     
     todos_ok = True
     
-    # CHECK 1: Nenhum candle de sábado ou domingo
-    fds = df_completo[df_completo.index.weekday >= 5]
-    ok = len(fds) == 0
-    print(f"  CHECK 1  │ Nenhum candle de sábado ou domingo")
-    print(f"           │ {'✅ PASS' if ok else '❌ FAIL'} — {len(fds)} candles encontrados")
+    # CHECK 1: Nenhum candle de sábado ou domingo E nenhum candle fora de 01h05-23h50
+    weekday = df_completo.index.weekday
+    hora = df_completo.index.strftime('%H:%M')
+    fds = df_completo[weekday >= 5]
+    fora_horario = df_completo[(hora < "01:05") | (hora > "23:50")]
+    ok = len(fds) == 0 and len(fora_horario) == 0
+    print(f"  CHECK 1  │ Sem candles de fim de semana (Sáb/Dom) e fora de 01h05-23h50")
+    print(f"           │ {'✅ PASS' if ok else '❌ FAIL'} — FDS: {len(fds)}, Fora Horário: {len(fora_horario)}")
     if not ok: todos_ok = False
         
     # CHECK 2: Nenhum candle antes das 16h30 na série OPERACIONAL
@@ -276,50 +256,41 @@ def executar_verificacoes(df_completo: pd.DataFrame, df_operacional: pd.DataFram
     print(f"           │ {'✅ PASS' if ok else '❌ FAIL'} — {len(apos_2230)} candles encontrados")
     if not ok: todos_ok = False
         
-    # CHECK 4: Nenhum feriado americano na base
-    cal = USMarketHolidayCalendar()
-    feriados = cal.holidays(start=df_completo.index.min(), end=df_completo.index.max())
-    holidays_in_base = df_completo[df_completo.index.normalize().isin(feriados)]
-    ok = len(holidays_in_base) == 0
-    print(f"\n  CHECK 4  │ Nenhum feriado americano na base")
-    print(f"           │ {'✅ PASS' if ok else '❌ FAIL'} — {len(holidays_in_base)} candles em feriados")
-    if not ok: todos_ok = False
-        
-    # CHECK 5: Série operacional ⊂ série completa
+    # CHECK 4: Série operacional ⊂ série completa
     diff = set(df_operacional.index) - set(df_completo.index)
     ok = len(diff) == 0
-    print(f"\n  CHECK 5  │ Série operacional ⊂ série completa")
+    print(f"\n  CHECK 4  │ Série operacional ⊂ série completa")
     print(f"           │ {'✅ PASS' if ok else '❌ FAIL'} — {len(diff)} candles operacionais ausentes")
     if not ok: todos_ok = False
         
-    # CHECK 6: Log-retornos sem NaN ou Inf (exceto primeiros candles de cada dia)
+    # CHECK 5: Log-retornos sem NaN ou Inf (exceto primeiros candles de cada dia)
     is_first_candle = df_completo.index.to_series().dt.date != df_completo.index.to_series().shift(1).dt.date
     nan_count = df_completo[~is_first_candle]["log_return"].isna().sum()
     inf_count = np.isinf(df_completo[~is_first_candle]["log_return"]).sum()
     ok = nan_count == 0 and inf_count == 0
-    print(f"\n  CHECK 6  │ Log-retornos sem NaN/Inf (exceto abertura de dia)")
+    print(f"\n  CHECK 5  │ Log-retornos sem NaN/Inf (exceto abertura de dia)")
     print(f"           │ {'✅ PASS' if ok else '❌ FAIL'} — NaN: {nan_count}, Inf: {inf_count}")
     if not ok: todos_ok = False
         
-    # CHECK 7: High >= Open e High >= Close
+    # CHECK 6: High >= Open e High >= Close
     high_ok = (df_completo["High"] >= df_completo["Open"]).all() and (df_completo["High"] >= df_completo["Close"]).all()
-    print(f"\n  CHECK 7  │ High >= Open e High >= Close")
+    print(f"\n  CHECK 6  │ High >= Open e High >= Close")
     print(f"           │ {'✅ PASS' if high_ok else '❌ FAIL'}")
     if not high_ok: todos_ok = False
         
-    # CHECK 8: Low <= Open e Low <= Close
+    # CHECK 7: Low <= Open e Low <= Close
     low_ok = (df_completo["Low"] <= df_completo["Open"]).all() and (df_completo["Low"] <= df_completo["Close"]).all()
-    print(f"\n  CHECK 8  │ Low <= Open e Low <= Close")
+    print(f"\n  CHECK 7  │ Low <= Open e Low <= Close")
     print(f"           │ {'✅ PASS' if low_ok else '❌ FAIL'}")
     if not low_ok: todos_ok = False
         
-    # CHECK 9: Nenhum preço zerado ou negativo
+    # CHECK 8: Nenhum preço zerado ou negativo
     precos_invalidos = (df_completo[["Open", "High", "Low", "Close"]] <= 0).any().any()
-    print(f"\n  CHECK 9  │ Nenhum preço zerado ou negativo")
+    print(f"\n  CHECK 8  │ Nenhum preço zerado ou negativo")
     print(f"           │ {'✅ PASS' if not precos_invalidos else '❌ FAIL'}")
     if precos_invalidos: todos_ok = False
         
-    # CHECK 10: Gaps intraday > 30 minutos dentro do mesmo dia
+    # CHECK 9: Gaps intraday > 30 minutos dentro do mesmo dia
     diffs = pd.Series(df_completo.index[1:]) - pd.Series(df_completo.index[:-1])
     gaps = diffs[diffs > pd.Timedelta(minutes=30)]
     gaps_intraday = []
@@ -330,7 +301,7 @@ def executar_verificacoes(df_completo: pd.DataFrame, df_operacional: pd.DataFram
             gaps_intraday.append(f"{dt_antes.strftime('%Y-%m-%d %H:%M')} → {dt_depois.strftime('%H:%M')} ({gap.total_seconds()/60:.0f}m)")
             
     ok = len(gaps_intraday) == 0
-    print(f"\n  CHECK 10 │ Gaps intraday > 30 minutos no mesmo dia")
+    print(f"\n  CHECK 9  │ Gaps intraday > 30 minutos no mesmo dia")
     print(f"           │ {'✅ PASS' if ok else '⚠️ WARN'} — {len(gaps_intraday)} gaps encontrados")
     for g in gaps_intraday[:5]:
         print(f"           │   - {g}")
@@ -357,12 +328,26 @@ def imprimir_relatorio(total_bruto, stats, df_completo, df_operacional):
     print(f"  Período coberto         : {df_completo.index.min().strftime('%Y-%m-%d')} → {df_completo.index.max().strftime('%Y-%m-%d')}")
     print(f"  Dias úteis cobertos     : {df_completo.index.normalize().nunique():>12,}")
     print(f"  Removidos incompl. (M10): {stats.get('removidos_incompletos', 0):>12,}")
-    print(f"  Feriados removidos      : {len(stats.get('feriados_removidos_lista', [])):>12,} dias")
-    if len(stats.get('feriados_removidos_lista', [])) > 0:
-        print(f"  Exemplo feriados        : {', '.join(stats['feriados_removidos_lista'][:5])}...")
+    print(f"  Horário servidor MT5  : UTC+2/UTC+3 (europeu)")
+    print(f"  Horário operacional   : 16h30-22h30 servidor")
+    print(f"  Fechamento obrigatório: 23h00 servidor")
+    print(f"  Feriados americanos   : mantidos na base pois o US100 CFD opera com")
+    print(f"                          liquidez reduzida nessas datas. Identificar")
+    print(f"                          via gaps de volume se necessário.")
 
     print(f"\n{sep}\n  SEÇÃO 2 — SÉRIE COMPLETA (nasdaq_m10_completo.parquet)\n{sep}")
     print(f"  Total de candles M10    : {len(df_completo):>12,}")
+    
+    # Confirmações
+    weekday = df_completo.index.weekday
+    hora_str = df_completo.index.strftime('%H:%M')
+    candles_sab = (weekday == 5).sum()
+    candles_dom = (weekday == 6).sum()
+    candles_fora_operacional = ((hora_str < "01:05") | (hora_str > "23:50")).sum()
+    
+    print(f"  Confirmar: {candles_sab} candles de sábado {'✅' if candles_sab == 0 else '❌'}")
+    print(f"  Confirmar: {candles_dom} candles de domingo {'✅' if candles_dom == 0 else '❌'}")
+    print(f"  Confirmar: {candles_fora_operacional} candles fora de 01h05-23h50 {'✅' if candles_fora_operacional == 0 else '❌'}")
     
     print(f"\n  Distribuição por hora do dia (servidor):")
     for h in range(24):
@@ -433,6 +418,11 @@ def executar_pipeline(csv_path: Path, forcar: bool = False):
     stats = {**stats1, **stats2}
     
     # 4. Criar Série Operacional (16:30 - 22:30)
+    # Horário operacional do trader: 16h30-22h30
+    # no horário do servidor MT5 (UTC+2/UTC+3).
+    # Equivale aproximadamente a 10h30-16h30 BRT
+    # fora do horário de verão americano, ou
+    # 11h30-17h30 BRT durante horário de verão.
     df_operacional = df_completo[
         (df_completo.index.strftime('%H:%M') >= "16:30") &
         (df_completo.index.strftime('%H:%M') <= "22:30")
@@ -461,7 +451,7 @@ if __name__ == "__main__":
     print("\n" + "█" * 70)
     print("█" + " " * 68 + "█")
     print("█   DATA LOADER NASDAQ v1 — DAY TRADE M10                         █")
-    print("█   Série Completa: 16h30 às 23h00 (Servidor MT5)                  █")
+    print("█   Série Completa: 01h05 às 23h50 (Servidor MT5)                  █")
     print("█   Série Operacional: 16h30 às 22h30                              █")
     print("█" + " " * 68 + "█")
     print("█" * 70)
