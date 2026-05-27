@@ -1,60 +1,49 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-hurst.py — Módulo de Cálculo do Expoente de Hurst por Análise R/S
+hurst.py — Módulo de Análise de Regime Estatístico (Expoente de Hurst & Meia-Vida)
 ================================================================================
-Autor: Quant Developer Sênior
-Data: 2026
 
-Descrição:
-    Este módulo calcula o Expoente de Hurst (H) usando o método clássico de
-    Análise R/S (Rescaled Range Analysis) em janela móvel de 100 candles H1.
+Objetivo:
+    Calcular em janela móvel (rolling window) o Expoente de Hurst e a Meia-Vida
+    de Reversão à Média para o EURUSD H1. Classificar o mercado em regimes de:
+    - REVERSÃO à Média (H < 0.45)
+    - TENDÊNCIA (H > 0.55)
+    - INDEFINIDO (0.45 <= H <= 0.55)
 
-    O Expoente de Hurst mede a "memória" de longo prazo de uma série temporal:
-        H ≈ 0.5  → Caminhada Aleatória (Random Walk) — sem memória
-        H > 0.5  → Persistência (trending) — movimentos se auto-reforçam
-        H < 0.5  → Antipersistência (mean reversion) — movimentos se revertem
+Justificativa Acadêmica e Prática:
+    O Expoente de Hurst (H) mede a memória de longo prazo de uma série temporal.
+    H < 0.5 indica comportamento antipersistente (reversão à média), H > 0.5
+    indica comportamento persistente (tendência) e H = 0.5 indica um passeio aleatório.
 
-    CORREÇÃO ESTRUTURAL (ETAPA 2):
-        Agora este módulo lê e processa a série H1 (eurusd_h1_clean.parquet).
-        Isso garante que a estimativa da dependência de longo prazo inclua a
-        baixa volatilidade noturna, proporcionando maior fidelidade matemática.
+Saída:
+    - data/eurusd_h1_hurst.parquet (Série completa com as colunas hurst, regime e half_life)
+    - graficos/hurst.png (Visualização em Dark Mode do regime do mercado)
 
-Fluxo de processamento:
-    1. Carregar dados H1 (eurusd_h1_clean.parquet)
-    2. Calcular R/S para sub-janelas [10, 20, 40, 80] dentro de cada janela de 100
-    3. Estimar H via regressão linear de log(RS) em função de log(N)
-    4. Classificar regime: REVERSÃO / TENDÊNCIA / INDEFINIDO
-    5. Salvar DataFrame enriquecido em Parquet (eurusd_h1_hurst.parquet)
-    6. Gerar gráfico de 2 painéis e imprimir tabela comparativa
 ================================================================================
 """
 
+import os
 import sys
+import argparse
 import logging
 import warnings
 import numpy as np
 import pandas as pd
-import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
 from pathlib import Path
-from scipy import stats
+from tqdm import tqdm
 
 # Suprimir warnings desnecessários
-warnings.filterwarnings("ignore", category=UserWarning)
-matplotlib.use("Agg")  # Backend sem interface gráfica
+warnings.filterwarnings("ignore")
 
-# tqdm opcional
-try:
-    from tqdm import tqdm
-    TQDM_DISPONIVEL = True
-except ImportError:
-    TQDM_DISPONIVEL = False
+# Configurar encoding para Windows
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
 
-# =============================================================================
-# CONFIGURAÇÃO DE LOGGING
-# =============================================================================
+# Configuração do Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -63,415 +52,507 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# CAMINHOS E PARÂMETROS
+# CONSTANTES E PARÂMETROS
 # =============================================================================
-DIR_MODULO  = Path(__file__).resolve().parent
-DIR_DATA    = DIR_MODULO / "data"
-DIR_GRAFICOS = DIR_MODULO / "graficos"
+DIR_PROJETO = Path(__file__).resolve().parent
+DIR_DATA    = DIR_PROJETO / "data"
+DIR_GRAFICOS = DIR_PROJETO / "graficos"
 
-PARQUET_ENTRADA = DIR_DATA / "eurusd_h1_clean.parquet"
+PARQUET_ENTRADA = DIR_DATA / "eurusd_h1_completo.parquet"
 PARQUET_SAIDA   = DIR_DATA / "eurusd_h1_hurst.parquet"
-GRAFICO_SAIDA   = DIR_GRAFICOS / "hurst.png"
+CAMINHO_GRAFICO = DIR_GRAFICOS / "hurst.png"
 
-# Parâmetros do cálculo de Hurst
-JANELA_PRINCIPAL  = 100          # Janela móvel em candles H1
-SUB_JANELAS       = [10, 20, 40, 80]  # Tamanhos para regressão R/S
+JANELA_PRINCIPAL = 100
+SUB_JANELAS      = [10, 20, 40, 80]
 
-# Limiares de classificação de regime
-LIMIAR_REVERSAO   = 0.45  # H < 0.45 → mercado antipersistente (mean reversion)
-LIMIAR_TENDENCIA  = 0.55  # H > 0.55 → mercado persistente (trend following)
+LIMIAR_REVERSAO  = 0.45
+LIMIAR_TENDENCIA = 0.55
 
-# Estilo do gráfico
-COR_FUNDO         = "#0D1117"   # Fundo escuro (GitHub dark)
-COR_TEXTO         = "#E6EDF3"
-COR_GRADE         = "#21262D"
-COR_PRECO         = "#58A6FF"   # Azul para o preço
-COR_HURST         = "#F0A500"   # Laranja para a linha de Hurst
-COR_TENDENCIA     = "#2EA043"   # Verde para zona de tendência
-COR_REVERSAO      = "#DA3633"   # Vermelho para zona de reversão
-COR_INDEFINIDO    = "#6E7681"   # Cinza para zona indefinida
-
+# Nomes dos dias da semana (em Português)
+DIAS_SEMANA = {
+    0: "Segunda",
+    1: "Terça",
+    2: "Quarta",
+    3: "Quinta",
+    4: "Sexta",
+    5: "Sábado",
+    6: "Domingo"
+}
 
 # =============================================================================
-# FUNÇÕES MATEMÁTICAS — ANÁLISE R/S
+# FUNÇÕES MATEMÁTICAS OTIMIZADAS
 # =============================================================================
 
-def calcular_rs_unica_janela(retornos: np.ndarray) -> float:
+def _quick_ols_slope(x: np.ndarray, y: np.ndarray) -> float:
+    """Calcula a inclinação (slope) de uma regressão linear OLS simples de forma rápida."""
+    x_mean = x.mean()
+    y_mean = y.mean()
+    num = ((x - x_mean) * (y - y_mean)).sum()
+    den = ((x - x_mean) ** 2).sum()
+    if den == 0:
+        return np.nan
+    return num / den
+
+
+def calcular_hurst_janela(retornos: np.ndarray) -> float:
     """
-    Calcula a estatística R/S (Rescaled Range) para uma série de retornos.
+    Calcula o Expoente de Hurst para um vetor de retornos usando o método R/S.
+
+    Parâmetros:
+        retornos: Array NumPy de tamanho JANELA_PRINCIPAL (100)
+
+    Retorna:
+        Expoente de Hurst (float) ou np.nan se houver erro ou inconsistência
     """
-    N = len(retornos)
-    if N < 4:
+    if len(retornos) < JANELA_PRINCIPAL:
         return np.nan
 
-    mu = np.mean(retornos)
+    log_n = []
+    log_rs = []
 
-    # Desvios em relação à média
-    desvios = retornos - mu
+    for n in SUB_JANELAS:
+        # Passo 1 — Dividir retornos em segmentos sem sobreposição
+        num_segmentos = JANELA_PRINCIPAL // n
+        rs_segmentos = []
 
-    # Soma cumulativa dos desvios (perfil Y_t)
-    perfil = np.cumsum(desvios)
+        for k in range(num_segmentos):
+            segmento = retornos[k * n : (k + 1) * n]
+            
+            # Passo 2 — Calcular R/S para o segmento
+            mu = segmento.mean()
+            y_t = np.cumsum(segmento - mu)
+            
+            r_range = y_t.max() - y_t.min()
+            s_std = segmento.std(ddof=1)
+            
+            # Validação: Retornos constantes (S == 0) implicam em divisão por zero
+            if s_std == 0:
+                return np.nan
+                
+            rs = r_range / s_std
+            rs_segmentos.append(rs)
 
-    # Range: amplitude máxima do perfil
-    R = np.max(perfil) - np.min(perfil)
+        # Passo 3 — RS médio dos segmentos para este n
+        rs_medio = np.mean(rs_segmentos)
+        if rs_medio > 0:
+            log_n.append(np.log(n))
+            log_rs.append(np.log(rs_medio))
 
-    # Desvio padrão amostral
-    S = np.std(retornos, ddof=1)
-
-    # Evitar divisão por zero
-    if S == 0 or S < 1e-15:
+    # Passo 4 — Regressão linear OLS log(RS_medio) ~ log(n)
+    if len(log_n) < 2:
         return np.nan
 
-    return R / S
+    h = _quick_ols_slope(np.array(log_n), np.array(log_rs))
 
-
-def calcular_hurst_regressao(retornos: np.ndarray, sub_janelas: list) -> float:
-    """
-    Estima o Expoente de Hurst pela regressão linear de log(RS) vs log(N).
-    """
-    N_total = len(retornos)
-    log_n_list = []
-    log_rs_list = []
-
-    for n in sub_janelas:
-        if n >= N_total:
-            continue
-
-        num_segmentos = N_total // n
-        if num_segmentos < 1:
-            continue
-
-        rs_valores = []
-        for i in range(num_segmentos):
-            segmento = retornos[i * n: (i + 1) * n]
-            rs = calcular_rs_unica_janela(segmento)
-            if not np.isnan(rs) and rs > 0:
-                rs_valores.append(rs)
-
-        if len(rs_valores) == 0:
-            continue
-
-        rs_medio = np.mean(rs_valores)
-        log_n_list.append(np.log(n))
-        log_rs_list.append(np.log(rs_medio))
-
-    if len(log_n_list) < 2:
+    # Validação do Hurst obtido
+    if np.isnan(h) or h < 0.0 or h > 1.5:
         return np.nan
 
-    # Regressão linear: log(RS) = H * log(N) + constante
-    slope, intercept, r_valor, p_valor, erro_std = stats.linregress(
-        log_n_list, log_rs_list
-    )
+    return h
 
-    # Validação
-    if slope < 0 or slope > 1.5:
+
+def calcular_half_life_janela(retornos: np.ndarray) -> float:
+    """
+    Estima a Meia-Vida de Reversão à Média via regressão AR(1) dos retornos.
+    Modelo: r_t = c + beta * r_{t-1} + epsilon_t
+    Taxa de reversão theta = -ln(beta)
+    Meia-vida = ln(2) / theta
+
+    Parâmetros:
+        retornos: Array NumPy contendo retornos consecutivos da janela
+
+    Retorna:
+        Meia-vida em número de candles (float) ou np.nan
+    """
+    if len(retornos) < JANELA_PRINCIPAL:
         return np.nan
 
-    return float(slope)
+    x = retornos[:-1]
+    y = retornos[1:]
 
+    # Regressão AR(1)
+    beta = _quick_ols_slope(x, y)
 
-def classificar_regime(h: float) -> str:
-    """
-    Classifica o regime de mercado com base no Expoente de Hurst.
-    """
-    if np.isnan(h):
-        return "INDEFINIDO"
-    if h < LIMIAR_REVERSAO:
-        return "REVERSAO"
-    if h > LIMIAR_TENDENCIA:
-        return "TENDENCIA"
-    return "INDEFINIDO"
+    # Reversão à média requer que 0 < beta < 1
+    if np.isnan(beta) or beta <= 0.0 or beta >= 1.0:
+        return np.nan
 
+    theta = -np.log(beta)
+    half_life = np.log(2.0) / theta
 
-# =============================================================================
-# CÁLCULO EM JANELA MÓVEL
-# =============================================================================
-
-def calcular_hurst_rolling(
-    serie_retornos: pd.Series,
-    janela: int = JANELA_PRINCIPAL,
-    sub_janelas: list = SUB_JANELAS,
-) -> pd.Series:
-    """
-    Aplica o cálculo do Expoente de Hurst em janela móvel sobre a série.
-    """
-    n = len(serie_retornos)
-    valores_hurst = np.full(n, np.nan, dtype=np.float32)
-    retornos_np = serie_retornos.values.astype(np.float64)
-
-    logger.info(
-        f"Calculando Hurst em janela móvel (Série Completa): "
-        f"{n:,} candles, janela={janela}, sub-janelas={sub_janelas}"
-    )
-
-    iterador = range(janela - 1, n)
-    if TQDM_DISPONIVEL:
-        iterador = tqdm(
-            iterador,
-            desc="Calculando Hurst",
-            unit=" candles",
-            ncols=80,
-            colour="yellow",
-        )
-
-    for i in iterador:
-        janela_atual = retornos_np[i - janela + 1: i + 1]
-        h = calcular_hurst_regressao(janela_atual, sub_janelas)
-        valores_hurst[i] = h
-
-    return pd.Series(valores_hurst, index=serie_retornos.index, name="hurst")
-
+    return half_life
 
 # =============================================================================
-# GERAÇÃO DO GRÁFICO
+# PIPELINE ROLLING
 # =============================================================================
 
-def gerar_grafico_hurst(df: pd.DataFrame, caminho: Path) -> None:
+def calcular_hurst_rolling(df: pd.DataFrame, janela: int = 100) -> pd.DataFrame:
     """
-    Gera gráfico de 2 painéis mostrando preço e Hurst sobre a série completa.
+    Executa o cálculo móvel (rolling window) do Hurst e Meia-Vida sobre a série completa.
+
+    Parâmetros:
+        df: DataFrame contendo a série de preços EURUSD H1 completa
+        janela: Janela principal de cálculo (100)
+
+    Retorna:
+        DataFrame com colunas 'hurst', 'regime' e 'half_life' adicionadas
     """
-    logger.info("Gerando gráfico do Expoente de Hurst...")
-
-    plt.rcParams.update({
-        "figure.facecolor":  COR_FUNDO,
-        "axes.facecolor":    COR_FUNDO,
-        "axes.edgecolor":    COR_GRADE,
-        "axes.labelcolor":   COR_TEXTO,
-        "xtick.color":       COR_TEXTO,
-        "ytick.color":       COR_TEXTO,
-        "text.color":        COR_TEXTO,
-        "grid.color":        COR_GRADE,
-        "grid.alpha":        0.5,
-        "font.family":       "monospace",
-    })
-
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1,
-        figsize=(18, 10),
-        sharex=True,
-        gridspec_kw={"height_ratios": [2, 1.5], "hspace": 0.04},
-    )
-    fig.suptitle(
-        "EURUSD H1 — Análise do Expoente de Hurst (Série Completa 24h)\n"
-        f"Janela: {JANELA_PRINCIPAL} candles | Sub-janelas: {SUB_JANELAS}",
-        color=COR_TEXTO,
-        fontsize=13,
-        fontweight="bold",
-        y=0.98,
-    )
-
-    ax1.plot(
-        df.index,
-        df["Close"],
-        color=COR_PRECO,
-        linewidth=0.7,
-        alpha=0.9,
-        label="EURUSD Fechamento H1",
-    )
-    ax1.set_ylabel("Preço (EURUSD)", color=COR_TEXTO, fontsize=10)
-    ax1.legend(loc="upper left", fontsize=9, framealpha=0.3)
-    ax1.grid(True, which="major", linestyle="--", alpha=0.3)
-
-    df_hurst_valido = df.dropna(subset=["hurst"])
-    idx = df_hurst_valido.index
-    h   = df_hurst_valido["hurst"].values
-
-    # fill_between por regime
-    ax2.fill_between(
-        idx, h, LIMIAR_TENDENCIA,
-        where=(h > LIMIAR_TENDENCIA),
-        color=COR_TENDENCIA, alpha=0.25,
-        label=f"Tendência (H > {LIMIAR_TENDENCIA})",
-    )
-    ax2.fill_between(
-        idx, h, LIMIAR_REVERSAO,
-        where=(h < LIMIAR_REVERSAO),
-        color=COR_REVERSAO, alpha=0.25,
-        label=f"Reversão (H < {LIMIAR_REVERSAO})",
-    )
-    ax2.fill_between(
-        idx, h, 0,
-        where=(h >= LIMIAR_REVERSAO) & (h <= LIMIAR_TENDENCIA),
-        color=COR_INDEFINIDO, alpha=0.10,
-        label=f"Indefinido ({LIMIAR_REVERSAO} ≤ H ≤ {LIMIAR_TENDENCIA})",
-    )
-
-    ax2.plot(idx, h, color=COR_HURST, linewidth=0.8, alpha=0.9, label="Hurst (H)")
-
-    ax2.axhline(LIMIAR_TENDENCIA, color=COR_TENDENCIA, linestyle="--",
-                linewidth=1.2, alpha=0.8)
-    ax2.axhline(LIMIAR_REVERSAO, color=COR_REVERSAO, linestyle="--",
-                linewidth=1.2, alpha=0.8)
-    ax2.axhline(0.50, color=COR_TEXTO, linestyle=":",
-                linewidth=0.8, alpha=0.4)
-
-    ax2.set_ylabel("Expoente de Hurst (H)", color=COR_TEXTO, fontsize=10)
-    ax2.set_xlabel("Data", color=COR_TEXTO, fontsize=10)
-    ax2.set_ylim(max(0, h.min() - 0.05), min(1, h.max() + 0.05))
-    ax2.legend(loc="upper right", fontsize=8, framealpha=0.3, ncol=2)
-    ax2.grid(True, which="major", linestyle="--", alpha=0.3)
-
-    fig.autofmt_xdate(rotation=30, ha="right")
-
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
-    plt.savefig(caminho, dpi=150, bbox_inches="tight", facecolor=COR_FUNDO)
-    plt.close()
-
-
-# =============================================================================
-# EXIBIÇÃO E COMPARATIVO DE MUDANÇA
-# =============================================================================
-
-def imprimir_comparativo_hurst(df_novo: pd.DataFrame, caminho_antigo: Path) -> None:
-    """
-    Imprime a tabela comparativa solicitada pelo usuário na Etapa 2.
-    """
-    df_novo_valido = df_novo.dropna(subset=["hurst"])
-    n_novo = len(df_novo_valido)
+    logger.info(f"Iniciando cálculo móvel (rolling) de Hurst na janela de {janela} candles...")
     
-    h_novo = df_novo_valido["hurst"]
-    contagem_novo = df_novo_valido["regime"].value_counts()
-    
-    pct_trend_novo = contagem_novo.get("TENDENCIA", 0) / n_novo * 100
-    pct_rev_novo = contagem_novo.get("REVERSAO", 0) / n_novo * 100
-    pct_ind_novo = contagem_novo.get("INDEFINIDO", 0) / n_novo * 100
+    # Extrair log-retornos como array NumPy para alta performance
+    retornos = df["log_return"].to_numpy()
+    n_candles = len(df)
 
-    # Valores padrão da série filtrada (fallback)
-    h_medio_antigo = 0.5873
-    std_antigo = 0.1032
-    pct_trend_antigo = 64.7
-    pct_rev_antigo = 9.6
-    pct_ind_antigo = 25.7
+    hurst_values = np.full(n_candles, np.nan, dtype=np.float32)
+    half_life_values = np.full(n_candles, np.nan, dtype=np.float32)
 
-    # Carregar estatísticas reais da Série Filtrada anterior se o arquivo existir
-    if caminho_antigo.exists():
-        try:
-            df_antigo = pd.read_parquet(caminho_antigo)
-            df_antigo_valido = df_antigo.dropna(subset=["hurst"])
-            n_antigo = len(df_antigo_valido)
-            if n_antigo > 0:
-                h_medio_antigo = df_antigo_valido["hurst"].mean()
-                std_antigo = df_antigo_valido["hurst"].std()
-                contagem_antigo = df_antigo_valido["regime"].value_counts()
-                pct_trend_antigo = contagem_antigo.get("TENDENCIA", 0) / n_antigo * 100
-                pct_rev_antigo = contagem_antigo.get("REVERSAO", 0) / n_antigo * 100
-                pct_ind_antigo = contagem_antigo.get("INDEFINIDO", 0) / n_antigo * 100
-        except Exception as e:
-            logger.warning(f"Erro ao ler parquet antigo para comparativo: {e}. Usando fallback.")
+    # Loop móvel otimizado com barra de progresso tqdm
+    # Primeiros 99 candles ficam como NaN pois necessitam de janela cheia (100)
+    for i in tqdm(range(janela - 1, n_candles), desc="Processando Regime Hurst"):
+        janela_retornos = retornos[i - janela + 1 : i + 1]
+        
+        # Calcular Hurst
+        h = calcular_hurst_janela(janela_retornos)
+        hurst_values[i] = h
+        
+        # Calcular Meia-Vida
+        hl = calcular_half_life_janela(janela_retornos)
+        half_life_values[i] = hl
 
-    print("\n" + "=" * 65)
-    print("  ETAPA 2 CONCLUÍDA — COMPARATIVO DO EXPOENTE DE HURST")
-    print("=" * 65)
-    print(f"  {'Métrica':<20} | {'Série Filtrada':>18} | {'Série Completa':>18}")
-    print(f"  {'-'*20}-+-{'-'*18}-+-{'-'*18}")
-    print(f"  {'Hurst médio':<20} | {h_medio_antigo:>18.4f} | {h_novo.mean():>18.4f}")
-    print(f"  {'Desvio Padrão':<20} | {std_antigo:>18.4f} | {h_novo.std():>18.4f}")
-    print(f"  {'% Tempo TENDÊNCIA':<20} | {pct_trend_antigo:>17.1f}% | {pct_trend_novo:>17.1f}%")
-    print(f"  {'% Tempo REVERSÃO':<20} | {pct_rev_antigo:>17.1f}% | {pct_rev_novo:>17.1f}%")
-    print(f"  {'% Tempo INDEFINIDO':<20} | {pct_ind_antigo:>17.1f}% | {pct_ind_novo:>17.1f}%")
-    print("=" * 65 + "\n")
+    # Adicionar colunas ao DataFrame original
+    df["hurst"] = hurst_values
+    df["half_life"] = half_life_values
 
+    # Classificar o regime de mercado com base nos thresholds
+    logger.info("Classificando regimes de mercado...")
+    df["regime"] = "INDEFINIDO"
+    df.loc[df["hurst"] < LIMIAR_REVERSAO, "regime"] = "REVERSAO"
+    df.loc[df["hurst"] > LIMIAR_TENDENCIA, "regime"] = "TENDENCIA"
+    df.loc[df["hurst"].isna(), "regime"] = np.nan
 
-# =============================================================================
-# FUNÇÃO PRINCIPAL
-# =============================================================================
-
-def calcular_e_salvar_hurst(
-    data_inicio: str = None,
-    data_fim: str = None,
-    forcar_reprocessamento: bool = False,
-) -> pd.DataFrame:
-    """
-    Pipeline de processamento do Expoente de Hurst sobre a série completa.
-    """
-    DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
-    DIR_DATA.mkdir(parents=True, exist_ok=True)
-
-    # Cache
-    if PARQUET_SAIDA.exists() and not forcar_reprocessamento:
-        logger.info(
-            f"Parquet Hurst já existe: {PARQUET_SAIDA.name}. Carregando cache..."
-        )
-        df = pd.read_parquet(PARQUET_SAIDA, engine="pyarrow")
-        if data_inicio:
-            df = df[df.index >= data_inicio]
-        if data_fim:
-            df = df[df.index <= data_fim]
-        return df
-
-    # Carregar dados
-    if not PARQUET_ENTRADA.exists():
-        raise FileNotFoundError(f"Parquet de entrada não encontrado: {PARQUET_ENTRADA}")
-
-    logger.info(f"Carregando dados H1 série completa: {PARQUET_ENTRADA.name}")
-    df = pd.read_parquet(PARQUET_ENTRADA, engine="pyarrow")
-    logger.info(f"Dados carregados: {len(df):,} candles H1")
-
-    if data_inicio:
-        df = df[df.index >= data_inicio]
-    if data_fim:
-        df = df[df.index <= data_fim]
-
-    # Calcular Hurst em janela móvel
-    serie_hurst = calcular_hurst_rolling(
-        df["log_return"],
-        janela=JANELA_PRINCIPAL,
-        sub_janelas=SUB_JANELAS,
-    )
-    df["hurst"] = serie_hurst.astype("float32")
-
-    # Classificar regimes
-    df["regime"] = df["hurst"].apply(classificar_regime)
+    # Converter para tipo categórico otimizado
     df["regime"] = df["regime"].astype("category")
-
-    logger.info("Classificação de regimes concluída.")
-
-    # Salvar Parquet completo
-    df.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy", index=True)
-    
-    # Gerar gráfico
-    gerar_grafico_hurst(df, GRAFICO_SAIDA)
 
     return df
 
+# =============================================================================
+# RELATÓRIO DE SAÍDA E ESTATÍSTICAS
+# =============================================================================
+
+def imprimir_relatorio_hurst(df: pd.DataFrame):
+    """Gera e imprime na tela o relatório detalhado do árbitro de regime de Hurst."""
+    sep = "═" * 70
+    sub_sep = "─" * 70
+    
+    df_valido = df.dropna(subset=["hurst"])
+    total_validos = len(df_valido)
+    
+    if total_validos == 0:
+        logger.error("Não há dados válidos de Hurst para gerar o relatório!")
+        return
+
+    # SEÇÃO 1 — Parâmetros utilizados
+    print(f"\n{sep}")
+    print("  SEÇÃO 1 — PARÂMETROS UTILIZADOS")
+    print(sep)
+    print(f"  Janela Principal de Retornos          : {JANELA_PRINCIPAL} H1 candles")
+    print(f"  Sub-janelas de Escalonamento (n)     : {SUB_JANELAS}")
+    print(f"  Limiar de Reversão à Média (Antipers.): < {LIMIAR_REVERSAO:.2f}")
+    print(f"  Limiar de Tendência (Persistente)    : > {LIMIAR_TENDENCIA:.2f}")
+    print(f"  Regime Indefinido (Passeio Aleatório) : {LIMIAR_REVERSAO:.2f} ≤ H ≤ {LIMIAR_TENDENCIA:.2f}")
+
+    # SEÇÃO 2 — Distribuição de regimes
+    rev_count = (df_valido["regime"] == "REVERSAO").sum()
+    ten_count = (df_valido["regime"] == "TENDENCIA").sum()
+    ind_count = (df_valido["regime"] == "INDEFINIDO").sum()
+
+    rev_pct = (rev_count / total_validos) * 100
+    ten_pct = (ten_count / total_validos) * 100
+    ind_pct = (ind_count / total_validos) * 100
+
+    print(f"\n{sep}")
+    print("  SEÇÃO 2 — DISTRIBUIÇÃO DE REGIMES")
+    print(sep)
+    print(f"  Total de candles com Hurst válido     : {total_validos:>12,}")
+    print(f"  REVERSÃO (Antipersistente)            : {rev_count:>12,} candles ({rev_pct:>5.2f}%)")
+    print(f"  TENDÊNCIA (Persistente)               : {ten_count:>12,} candles ({ten_pct:>5.2f}%)")
+    print(f"  INDEFINIDO (Passeio Aleatório)        : {ind_count:>12,} candles ({ind_pct:>5.2f}%)")
+
+    # SEÇÃO 3 — Estatísticas do Hurst
+    h_mean = df_valido["hurst"].mean()
+    h_std = df_valido["hurst"].std()
+    h_min = df_valido["hurst"].min()
+    h_max = df_valido["hurst"].max()
+    h_median = df_valido["hurst"].median()
+
+    hl_valido = df_valido["half_life"].dropna()
+    hl_mean = hl_valido.mean()
+    hl_median = hl_valido.median()
+
+    print(f"\n{sep}")
+    print("  SEÇÃO 3 — ESTATÍSTICAS DO HURST & MEIA-VIDA")
+    print(sep)
+    print(f"  Hurst Médio                          : {h_mean:>12.4f}")
+    print(f"  Hurst Mediana                        : {h_median:>12.4f}")
+    print(f"  Desvio Padrão (Hurst)                : {h_std:>12.4f}")
+    print(f"  Hurst Mínimo                         : {h_min:>12.4f}")
+    print(f"  Hurst Máximo                         : {h_max:>12.4f}")
+    print(f"  Meia-Vida Média de Reversão          : {hl_mean:>12.2f} candles H1")
+    print(f"  Meia-Vida Mediana de Reversão        : {hl_median:>12.2f} candles H1")
+
+    # SEÇÃO 4 — Distribuição de regimes por hora do dia (00h até 23h)
+    print(f"\n{sep}")
+    print("  SEÇÃO 4 — DISTRIBUIÇÃO DE REGIMES POR HORA DO DIA (Servidor MT5)")
+    print(sep)
+    print("   Hora  │  REVERSÃO  │  TENDÊNCIA  │ INDEFINIDO │ regime Dominante")
+    print("  " + "─" * 66)
+    
+    for h in range(24):
+        df_hora = df_valido[df_valido.index.hour == h]
+        t_hora = len(df_hora)
+        if t_hora > 0:
+            rev_h = (df_hora["regime"] == "REVERSAO").sum() / t_hora * 100
+            ten_h = (df_hora["regime"] == "TENDENCIA").sum() / t_hora * 100
+            ind_h = (df_hora["regime"] == "INDEFINIDO").sum() / t_hora * 100
+            
+            # Identificar o maior
+            regimes_pct = {"REVERSÃO": rev_h, "TENDÊNCIA": ten_h, "INDEFINIDO": ind_h}
+            dominante = max(regimes_pct, key=regimes_pct.get)
+            
+            # Detalhe visual para a madrugada
+            madrugada_tag = " 🌙" if h < 10 else " ☀️"
+            
+            print(f"    {h:02d}h{madrugada_tag} │   {rev_h:>5.1f}%   │   {ten_h:>5.1f}%   │   {ind_h:>5.1f}%   │ {dominante}")
+
+    # SEÇÃO 5 — Distribuição de regimes por dia da semana
+    print(f"\n{sep}")
+    print("  SEÇÃO 5 — DISTRIBUIÇÃO DE REGIMES POR DIA DA SEMANA")
+    print(sep)
+    print("   Dia da Semana │  REVERSÃO  │  TENDÊNCIA  │ INDEFINIDO │ regime Dominante")
+    print("  " + "─" * 66)
+    
+    for wd in range(5):  # Segunda (0) a Sexta (4)
+        df_dia = df_valido[df_valido.index.weekday == wd]
+        t_dia = len(df_dia)
+        if t_dia > 0:
+            rev_d = (df_dia["regime"] == "REVERSAO").sum() / t_dia * 100
+            ten_d = (df_dia["regime"] == "TENDENCIA").sum() / t_dia * 100
+            ind_d = (df_dia["regime"] == "INDEFINIDO").sum() / t_dia * 100
+            
+            regimes_pct = {"REVERSÃO": rev_d, "TENDÊNCIA": ten_d, "INDEFINIDO": ind_d}
+            dominante = max(regimes_pct, key=regimes_pct.get)
+            nome_dia = DIAS_SEMANA[wd]
+            
+            print(f"   {nome_dia:13s} │   {rev_d:>5.1f}%   │   {ten_d:>5.1f}%   │   {ind_d:>5.1f}%   │ {dominante}")
+
+    # SEÇÃO 6 — Evolução anual do Hurst (2016 a 2026)
+    print(f"\n{sep}")
+    print("  SEÇÃO 6 — EVOLUÇÃO ANUAL DO EXPOENTE DE HURST")
+    print(sep)
+    anos = sorted(df_valido.index.year.unique())
+    for ano in anos:
+        df_ano = df_valido[df_valido.index.year == ano]
+        h_ano = df_ano["hurst"].mean()
+        ten_ano = (df_ano["regime"] == "TENDENCIA").sum() / len(df_ano) * 100
+        rev_ano = (df_ano["regime"] == "REVERSAO").sum() / len(df_ano) * 100
+        print(f"    Ano {ano} │ H Médio: {h_ano:.4f} │ Reversão: {rev_ano:>5.1f}% │ Tendência: {ten_ano:>5.1f}%")
+    
+    print(f"\n{sep}\n")
 
 # =============================================================================
-# EXECUÇÃO DIRETA
+# GERAÇÃO DO GRÁFICO (DARK MODE)
+# =============================================================================
+
+def gerar_grafico_regime(df: pd.DataFrame):
+    """
+    Gera um gráfico analítico duplo em Dark Mode contendo o preço
+    EURUSD com coloração por regime e a evolução do Hurst.
+    Salva em graficos/hurst.png.
+    """
+    logger.info("Gerando gráfico estatístico em Dark Mode...")
+    
+    # Criar pasta de gráficos se não existir
+    DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
+    
+    df_plot = df.dropna(subset=["hurst"])
+    if len(df_plot) == 0:
+        logger.error("Sem dados de Hurst suficientes para plotar!")
+        return
+
+    # Ativar estilo escuro
+    plt.style.use('dark_background')
+    
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(15, 10), sharex=True, gridspec_kw={'height_ratios': [3, 2]})
+    fig.suptitle("EURUSD H1 — Árbitro de Regime por Expoente de Hurst", fontsize=16, fontweight='bold', color='#FFFFFF')
+    
+    # Cores harmoniosas (Tailored HSL/Hex)
+    cor_tendencia = '#00E676'   # Verde Neon Translúcido
+    cor_reversao = '#FF1744'    # Vermelho Neon Translúcido
+    cor_indefinido = '#555555'  # Cinza Médio Translúcido
+    
+    # -------------------------------------------------------------------------
+    # PAINEL 1 — Preço Close EURUSD com coloração por Regime
+    # -------------------------------------------------------------------------
+    ax1.plot(df_plot.index, df_plot["Close"], color='#ECEFF1', linewidth=1.2, label='Preço EURUSD')
+    ax1.set_title("Identificação de Regime sobre a Série de Preços", fontsize=12, fontweight='semibold', color='#CFD8DC')
+    ax1.set_ylabel("EURUSD H1 Close", fontsize=11, color='#CFD8DC')
+    ax1.grid(True, linestyle='--', alpha=0.15)
+    
+    # Preenchimento de regime de fundo
+    # Otimização por blocos contínuos de regime para evitar lentidão extrema no plot
+    regimes = df_plot["regime"].to_numpy()
+    times = df_plot.index
+    
+    # Detectar transições de regime
+    mudancas = np.where(regimes[:-1] != regimes[1:])[0]
+    limites = [0] + list(mudancas + 1) + [len(df_plot) - 1]
+    
+    for start, end in zip(limites[:-1], limites[1:]):
+        reg = regimes[start]
+        if reg == "TENDENCIA":
+            ax1.axvspan(times[start], times[end], color=cor_tendencia, alpha=0.08)
+        elif reg == "REVERSAO":
+            ax1.axvspan(times[start], times[end], color=cor_reversao, alpha=0.08)
+        else:
+            ax1.axvspan(times[start], times[end], color=cor_indefinido, alpha=0.03)
+
+    # -------------------------------------------------------------------------
+    # PAINEL 2 — Expoente de Hurst ao longo do tempo
+    # -------------------------------------------------------------------------
+    ax2.plot(df_plot.index, df_plot["hurst"], color='#64B5F6', linewidth=1.0, label='Hurst (Janela=100)')
+    ax2.axhline(LIMIAR_REVERSAO, color=cor_reversao, linestyle='--', alpha=0.6, linewidth=1.0, label='Limiar Reversão (0.45)')
+    ax2.axhline(LIMIAR_TENDENCIA, color=cor_tendencia, linestyle='--', alpha=0.6, linewidth=1.0, label='Limiar Tendência (0.55)')
+    
+    # Preenchimento das zonas de Hurst
+    ax2.fill_between(df_plot.index, df_plot["hurst"], LIMIAR_TENDENCIA, where=(df_plot["hurst"] > LIMIAR_TENDENCIA),
+                     color=cor_tendencia, alpha=0.2, interpolate=True)
+    ax2.fill_between(df_plot.index, df_plot["hurst"], LIMIAR_REVERSAO, where=(df_plot["hurst"] < LIMIAR_REVERSAO),
+                     color=cor_reversao, alpha=0.2, interpolate=True)
+    ax2.fill_between(df_plot.index, LIMIAR_REVERSAO, LIMIAR_TENDENCIA, 
+                     where=((df_plot["hurst"] >= LIMIAR_REVERSAO) & (df_plot["hurst"] <= LIMIAR_TENDENCIA)),
+                     color=cor_indefinido, alpha=0.1, interpolate=True)
+    
+    ax2.set_title("Evolução Temporal do Expoente de Hurst", fontsize=12, fontweight='semibold', color='#CFD8DC')
+    ax2.set_ylabel("Hurst H", fontsize=11, color='#CFD8DC')
+    ax2.set_ylim(0.15, 0.85)
+    ax2.grid(True, linestyle='--', alpha=0.15)
+    
+    # Ajustes finos de layout
+    fig.tight_layout()
+    plt.subplots_adjust(top=0.92)
+    
+    # Salvar o gráfico
+    plt.savefig(CAMINHO_GRAFICO, dpi=150, facecolor='#121212')
+    plt.close()
+    
+    logger.info(f"Gráfico analítico salvo com sucesso em: {CAMINHO_GRAFICO.resolve()}")
+
+# =============================================================================
+# PIPELINE DE EXECUÇÃO E CACHE
+# =============================================================================
+
+def processar_pipeline_hurst(forcar: bool = False) -> pd.DataFrame:
+    """
+    Controla o pipeline de carregamento, cálculo e cache do módulo hurst.
+    """
+    # Se já existir cache e não forçar, carregar direto
+    if PARQUET_SAIDA.exists() and not forcar:
+        logger.info("Cache encontrado. Carregando dados de Hurst pré-calculados...")
+        df = pd.read_parquet(PARQUET_SAIDA, engine="pyarrow")
+        
+        # Gerar o gráfico também se não existir, mesmo com cache
+        if not CAMINHO_GRAFICO.exists():
+            gerar_grafico_regime(df)
+            
+        imprimir_relatorio_hurst(df)
+        return df
+
+    # Caso contrário, processar do zero
+    if not PARQUET_ENTRADA.exists():
+        raise FileNotFoundError(
+            f"Arquivo de série completa não encontrado: {PARQUET_ENTRADA}\n"
+            f"Por favor, execute primeiro o data_loader.py do projeto."
+        )
+
+    logger.info("Reprocessando base completa do EURUSD H1 para o cálculo de Hurst...")
+    df_completo = pd.read_parquet(PARQUET_ENTRADA, engine="pyarrow")
+
+    # Calcular Hurst Rolling
+    df_resultado = calcular_hurst_rolling(df_completo, JANELA_PRINCIPAL)
+
+    # Salvar cache
+    logger.info(f"Salvando resultados no cache: {PARQUET_SAIDA.name}")
+    df_resultado.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy", index=True)
+
+    # Gerar Gráfico e Relatório
+    gerar_grafico_regime(df_resultado)
+    imprimir_relatorio_hurst(df_resultado)
+
+    return df_resultado
+
+# =============================================================================
+# FUNÇÕES UTILIÁRIAS EXPORTÁVEIS
+# =============================================================================
+
+def carregar_hurst() -> pd.DataFrame:
+    """
+    Carrega o parquet com Hurst calculado.
+    Pode ser importada por outros módulos do sistema.
+    """
+    if not PARQUET_SAIDA.exists():
+        raise FileNotFoundError(
+            f"Parquet com Hurst não encontrado: {PARQUET_SAIDA}\n"
+            f"Execute: python hurst.py"
+        )
+    return pd.read_parquet(PARQUET_SAIDA, engine="pyarrow")
+
+
+def get_regime_atual(df_hurst: pd.DataFrame, datetime) -> str:
+    """
+    Retorna o regime de mercado no datetime naive especificado.
+    """
+    if datetime not in df_hurst.index:
+        return "INDEFINIDO"
+    val = df_hurst.loc[datetime, "regime"]
+    return str(val) if pd.notna(val) else "INDEFINIDO"
+
+
+def is_reversao(df_hurst: pd.DataFrame, datetime) -> bool:
+    """
+    Verifica se o mercado está em regime de REVERSÃO no datetime especificado.
+    """
+    return get_regime_atual(df_hurst, datetime) == "REVERSAO"
+
+
+def is_tendencia(df_hurst: pd.DataFrame, datetime) -> bool:
+    """
+    Verifica se o mercado está em regime de TENDÊNCIA no datetime especificado.
+    """
+    return get_regime_atual(df_hurst, datetime) == "TENDENCIA"
+
+# =============================================================================
+# INTERFACE CLI
 # =============================================================================
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(
-        description="Cálculo de Hurst sobre série H1 completa 24h",
-    )
-    parser.add_argument(
-        "--inicio",
-        type=str,
-        default=None,
-        help="Data de início (YYYY-MM-DD)"
-    )
-    parser.add_argument(
-        "--fim",
-        type=str,
-        default=None,
-        help="Data de fim (YYYY-MM-DD)"
+        description="Árbitro de Regime EURUSD H1 — Cálculo do Expoente de Hurst e Meia-Vida",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument(
         "--forcar",
         action="store_true",
-        help="Forçar recálculo"
+        help="Forçar reprocessamento total da base de retornos"
     )
-
     args = parser.parse_args()
 
-    print("\n" + "=" * 60)
-    print("  QUANT EURUSD — ETAPA 2: CÁLCULO DE HURST (SÉRIE COMPLETA)")
-    print("  Regressão R/S em Janela Móvel contínua de 24h")
-    print("=" * 60)
+    print("\n" + "█" * 70)
+    print("█" + " " * 68 + "█")
+    print("█   ÁRBITRO DE REGIME EURUSD v2 — EXPOENTE DE HURST              █")
+    print("█   Método R/S móvel (Janela 100)                                 █")
+    print("█   Classificação: REVERSÃO (<0.45) │ TENDÊNCIA (>0.55)           █")
+    print("█" + " " * 68 + "█")
+    print("█" * 70)
 
-    df_hurst = calcular_e_salvar_hurst(
-        data_inicio=args.inicio,
-        data_fim=args.fim,
-        forcar_reprocessamento=args.forcar,
-    )
+    processar_pipeline_hurst(args.forcar)
+    print("✅ Módulo executado com sucesso!\n")

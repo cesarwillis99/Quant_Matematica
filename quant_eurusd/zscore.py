@@ -1,62 +1,46 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-zscore.py — Módulo de Z-Score e Sinais de Mean Reversion
+zscore.py — Módulo de Reversão à Média por Z-Score do Preço
 ================================================================================
-Autor: Quant Developer Sênior
-Data: 2026
 
-Descrição:
-    Este módulo calcula o Z-Score do preço de fechamento em janela móvel de
-    50 candles H1 e gera sinais de entrada/saída para a estratégia de
-    reversão à média (Mean Reversion).
+Objetivo:
+    Implementar a estratégia quantitativa de Mean Reversion baseada no Z-Score do
+    preço de fechamento Close.
+    
+Regras de Operação:
+    - Opera APENAS quando o Hurst classifica o regime como "REVERSAO".
+    - Indicadores calculados sobre a série COMPLETA (todos os 64.002 candles).
+    - Geração de sinais de entrada restrita à janela OPERACIONAL (10h00-22h30 seg-sex).
+    - Gestão de risco monitorada 24h na série completa.
 
-    CONDIÇÃO OBRIGATÓRIA: o sinal só é gerado quando o regime Hurst = "REVERSAO".
-    Em outros regimes, nenhum sinal é emitido, independentemente do Z-Score.
+Saída:
+    - data/eurusd_h1_zscore.parquet
+    - graficos/zscore_sinais.png (Gráfico de 3 painéis em Dark Mode)
 
-    Fórmula do Z-Score:
-        Z_t = (Close_t - mu_N) / sigma_N
-
-    Onde:
-        mu_N    = média dos últimos N=50 fechamentos (rolling mean)
-        sigma_N = desvio padrão dos últimos N=50 fechamentos (rolling std, ddof=1)
-
-    Regras de Sinal:
-        COMPRA  (LONG):  Z_t <= -3.0  E regime = "REVERSAO"
-        VENDA   (SHORT): Z_t >= +3.0  E regime = "REVERSAO"
-        NEUTRO:  caso contrário
-
-    Gestão de Risco:
-        Stop Loss  = 2.0 * VR_pips  (volatilidade realizada em pips)
-        Take Profit = 3.0 * VR_pips  (R:R mínimo de 1:1.5)
-
-Fluxo de processamento:
-    1. Carregar dados H1 com Hurst (eurusd_h1_hurst.parquet)
-    2. Calcular Z-Score em janela móvel de 50 candles
-    3. Calcular Volatilidade Realizada (VR) em 50 candles
-    4. Derivar Stop Loss e Take Profit em pips
-    5. Gerar sinais condicionados ao regime Hurst
-    6. Salvar DataFrame em Parquet
-    7. Gerar gráfico de 3 painéis
 ================================================================================
 """
 
+import os
 import sys
+import argparse
 import logging
 import warnings
 import numpy as np
 import pandas as pd
-import matplotlib
 import matplotlib.pyplot as plt
-import matplotlib.gridspec as gridspec
 from pathlib import Path
 
-warnings.filterwarnings("ignore", category=UserWarning)
-matplotlib.use("Agg")
+# Suprimir warnings desnecessários
+warnings.filterwarnings("ignore")
 
-# =============================================================================
-# CONFIGURAÇÃO DE LOGGING
-# =============================================================================
+# Configurar encoding para Windows
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
+if sys.stderr.encoding != "utf-8":
+    sys.stderr.reconfigure(encoding="utf-8")
+
+# Configuração do Logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -65,550 +49,387 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # =============================================================================
-# CAMINHOS E PARÂMETROS
+# CONSTANTES E CAMINHOS
 # =============================================================================
-DIR_MODULO   = Path(__file__).resolve().parent
-DIR_DATA     = DIR_MODULO / "data"
-DIR_GRAFICOS = DIR_MODULO / "graficos"
+DIR_PROJETO = Path(__file__).resolve().parent
+DIR_DATA    = DIR_PROJETO / "data"
+DIR_GRAFICOS = DIR_PROJETO / "graficos"
 
 PARQUET_ENTRADA = DIR_DATA / "eurusd_h1_hurst.parquet"
 PARQUET_SAIDA   = DIR_DATA / "eurusd_h1_zscore.parquet"
-GRAFICO_SAIDA   = DIR_GRAFICOS / "zscore_sinais.png"
-
-# Parâmetros do Z-Score
-JANELA_ZSCORE      = 50    # Candles H1 para rolling mean/std do preço
-JANELA_VR          = 50    # Candles H1 para cálculo de Volatilidade Realizada
-
-# Limiares do Z-Score para geração de sinais
-Z_ENTRADA_COMPRA   = -3.0  # Z <= -3.0 → sinal de LONG
-Z_ENTRADA_VENDA    =  3.0  # Z >= +3.0 → sinal de SHORT
-Z_STOP_COMPRA      = -3.5  # Stop loss para LONG (Z abaixo do stop)
-Z_STOP_VENDA       =  3.5  # Stop loss para SHORT (Z acima do stop)
-Z_FECHAMENTO_MIN   = -0.5  # Fechar posição quando Z retornar à zona neutra
-Z_FECHAMENTO_MAX   =  0.5
-
-# Parâmetros de gestão de risco
-MULT_STOP_PIPS     = 2.0   # SL = 2.0 * VR_pips
-MULT_TP_PIPS       = 3.0   # TP = 3.0 * VR_pips (R:R de 1:1.5)
-
-# Constante para conversão de retornos para pips no EURUSD
-# 1 pip EURUSD = 0.0001; multiplicar por 10.000 → pips
-FATOR_PIPS_EURUSD  = 10_000
-
-# Paleta de cores do gráfico (dark mode)
-COR_FUNDO       = "#0D1117"
-COR_TEXTO       = "#E6EDF3"
-COR_GRADE       = "#21262D"
-COR_PRECO       = "#58A6FF"
-COR_ZSCORE      = "#A371F7"  # Roxo para Z-Score
-COR_COMPRA      = "#3FB950"  # Verde para sinais de compra
-COR_VENDA       = "#F85149"  # Vermelho para sinais de venda
-COR_REVERSAO    = "#F85149"
-COR_TENDENCIA   = "#3FB950"
-COR_INDEFINIDO  = "#6E7681"
-COR_ZONA_VENDA  = "#3D1C1C"  # Fundo zona sobrecomprado
-COR_ZONA_COMPRA = "#1C3D2E"  # Fundo zona sobrevendido
-
+CAMINHO_GRAFICO = DIR_GRAFICOS / "zscore_sinais.png"
 
 # =============================================================================
-# CÁLCULOS ESTATÍSTICOS
+# FUNÇÕES DE CÁLCULO DE APLICATIVOS (ROLLING)
 # =============================================================================
 
-def calcular_zscore_rolling(
-    preco_close: pd.Series,
-    janela: int = JANELA_ZSCORE,
-) -> pd.Series:
+def verificar_janela_operacional(dt_index: pd.DatetimeIndex) -> pd.Series:
     """
-    Calcula o Z-Score do preço de fechamento em janela móvel.
-
-    Fórmula:
-        Z_t = (Close_t - mu_N) / sigma_N
-
-    Onde:
-        mu_N    = média aritmética dos últimos N fechamentos
-        sigma_N = desvio padrão amostral (ddof=1) dos últimos N fechamentos
-
-    IMPORTANTE: O Z-Score é calculado sobre o PREÇO (Close), não sobre
-    os log-retornos. Isso mede o desvio do preço atual em relação à sua
-    média recente, em unidades de desvio padrão. É adequado para Mean
-    Reversion porque assume que o preço tende a retornar à sua média.
-
-    Parâmetros:
-        preco_close: pd.Series — série de preços de fechamento H1
-        janela: int — tamanho da janela móvel (padrão: 50)
-
-    Retorna:
-        pd.Series — série do Z-Score com mesmo índice de entrada
+    Filtra os timestamps que estão dentro do horário operacional de segunda a sexta (10h00 às 22h30).
     """
-    logger.info(
-        f"Calculando Z-Score do preço (janela={janela} candles H1)..."
-    )
+    weekday = dt_index.weekday
+    hora    = dt_index.strftime('%H:%M')
 
-    # Média móvel dos últimos N fechamentos
-    media_rolling = preco_close.rolling(window=janela, min_periods=janela).mean()
+    seg_sex      = (weekday >= 0) & (weekday <= 4)
+    horario_op   = (hora >= "10:00") & (hora <= "22:30")
 
-    # Desvio padrão amostral (ddof=1 é o padrão do pandas rolling.std)
-    std_rolling = preco_close.rolling(window=janela, min_periods=janela).std(ddof=1)
-
-    # Z-Score: desvio do preço atual em relação à média, em sigma
-    zscore = (preco_close - media_rolling) / std_rolling
-
-    # Onde std = 0 (preço completamente constante), Z-Score é indefinido
-    zscore[std_rolling == 0] = np.nan
-
-    logger.info(
-        f"Z-Score calculado: "
-        f"min={zscore.min():.2f}, max={zscore.max():.2f}, "
-        f"valores válidos={zscore.notna().sum():,}"
-    )
-
-    return zscore.astype("float32")
-
-
-def calcular_volatilidade_realizada(
-    log_retornos: pd.Series,
-    preco_close: pd.Series,
-    janela: int = JANELA_VR,
-) -> tuple:
-    """
-    Calcula a Volatilidade Realizada (VR) dos log-retornos e converte para pips.
-
-    A VR mede a dispersão real dos retornos nas últimas N horas, servindo
-    como estimativa dinâmica de risco para dimensionar Stop Loss e Take Profit.
-
-    Fórmulas:
-        VR       = std(log_retornos_{t-N+1..t})    (desvio padrão rolling)
-        VR_pips  = VR * Close_t * 10.000            (conversão para pips EURUSD)
-
-        Stop Loss   (pips) = 2.0 * VR_pips
-        Take Profit (pips) = 3.0 * VR_pips
-
-    Parâmetros:
-        log_retornos: pd.Series — log-retornos H1
-        preco_close:  pd.Series — preço de fechamento H1
-        janela: int — janela para cálculo da VR (padrão: 50)
-
-    Retorna:
-        tuple (vr_pips, sl_pips, tp_pips) — três pd.Series com float32
-    """
-    logger.info(
-        f"Calculando Volatilidade Realizada (janela={janela} candles H1)..."
-    )
-
-    # Volatilidade Realizada = desvio padrão dos log-retornos na janela
-    vr = log_retornos.rolling(window=janela, min_periods=janela).std(ddof=1)
-
-    # Converter para pips: VR * Close * 10.000
-    # Close é necessário porque a VR está em retornos percentuais (adimensional)
-    vr_pips = vr * preco_close * FATOR_PIPS_EURUSD
-
-    # Stop Loss e Take Profit
-    sl_pips = MULT_STOP_PIPS * vr_pips
-    tp_pips = MULT_TP_PIPS   * vr_pips
-
-    return (
-        vr_pips.astype("float32"),
-        sl_pips.astype("float32"),
-        tp_pips.astype("float32"),
-    )
-
-
-def gerar_sinais_zscore(
-    zscore: pd.Series,
-    regime: pd.Series,
-) -> pd.Series:
-    """
-    Gera os sinais de entrada da estratégia Mean Reversion com base no Z-Score.
-
-    PRÉ-CONDIÇÃO OBRIGATÓRIA: regime Hurst = "REVERSAO".
-    Sem essa condição, nenhum sinal é gerado independentemente do Z-Score.
-
-    Lógica de sinal:
-        +1 (COMPRA/LONG):  Z_t <= -3.0  E  regime = "REVERSAO"
-        -1 (VENDA/SHORT):  Z_t >= +3.0  E  regime = "REVERSAO"
-         0 (NEUTRO):       qualquer outro caso
-
-    Interpretação econômica:
-        Z <= -3.0 significa que o preço está 3.0 desvios abaixo da média.
-        Estatisticamente, preços tão distantes da média tendem a reverter.
-        Esperamos que o preço suba de volta para a média (Z → 0).
-
-        Z >= +3.0 é o oposto: preço extremamente acima da média → esperamos queda.
-
-    Parâmetros:
-        zscore: pd.Series — série do Z-Score calculado
-        regime: pd.Series — série de regime Hurst ("REVERSAO", "TENDENCIA", etc.)
-
-    Retorna:
-        pd.Series de int8 com valores {-1, 0, 1}
-    """
-    logger.info("Gerando sinais Z-Score condicionados ao regime Hurst...")
-
-    # Condição de regime ativo
-    em_reversao = regime == "REVERSAO"
-
-    # Sinais brutos (sem condição de regime)
-    sinal_compra = (zscore <= Z_ENTRADA_COMPRA)
-    sinal_venda  = (zscore >= Z_ENTRADA_VENDA)
-
-    # Sinais finais: apenas quando em regime de reversão
-    sinais = pd.Series(0, index=zscore.index, dtype="int8")
-    sinais[em_reversao & sinal_compra] =  1
-    sinais[em_reversao & sinal_venda]  = -1
-
-    # Estatísticas dos sinais gerados
-    n_compra = (sinais == 1).sum()
-    n_venda  = (sinais == -1).sum()
-    n_total  = len(sinais)
-
-    logger.info(
-        f"Sinais gerados: COMPRA={n_compra:,} ({n_compra/n_total*100:.2f}%), "
-        f"VENDA={n_venda:,} ({n_venda/n_total*100:.2f}%), "
-        f"NEUTRO={n_total - n_compra - n_venda:,}"
-    )
-
-    return sinais
-
+    return pd.Series(seg_sex & horario_op, index=dt_index)
 
 # =============================================================================
-# GERAÇÃO DO GRÁFICO
+# PIPELINE COMPLETO
 # =============================================================================
 
-def gerar_grafico_zscore(df: pd.DataFrame, caminho: Path) -> None:
+def calcular_indicadores_zscore(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Gera gráfico de 3 painéis para visualização da estratégia Z-Score.
-
-    Painel 1 (topo): Preço Close com marcadores de entrada
-        - Triângulo verde para baixo (▼) = sinal de COMPRA (preço sobrevendido)
-        - Triângulo vermelho para cima  (▲) = sinal de VENDA (preço sobrecomprado)
-
-    Painel 2 (meio): Z-Score ao longo do tempo
-        - Linha roxa: Z-Score
-        - Linhas tracejadas em ±2.5 e ±3.5
-        - Zona verde (Z < -2.5): sobrevendido (compra)
-        - Zona vermelha (Z > +2.5): sobrecomprado (venda)
-
-    Painel 3 (baixo): Regime Hurst colorido por categoria
-        - Verde: TENDENCIA
-        - Vermelho: REVERSAO
-        - Cinza: INDEFINIDO
-
-    Parâmetros:
-        df: DataFrame com todas as colunas calculadas
-        caminho: Path — destino do arquivo PNG
+    Calcula o Z-Score do Preço de Fechamento e o SL/TP dinâmicos com base na Volatilidade Realizada.
     """
-    logger.info("Gerando gráfico de 3 painéis Z-Score + Sinais...")
+    logger.info("Calculando Z-Score do Preço de Fechamento (rolling 50)...")
+    
+    # Z_t = (Close_t - mu_50) / std_50 (amostral, ddof=1)
+    close_mean = df["Close"].rolling(window=50).mean()
+    close_std  = df["Close"].rolling(window=50).std(ddof=1)
+    
+    # Se std == 0, resulta em NaN automaticamente no pandas
+    df["zscore"] = ((df["Close"] - close_mean) / close_std).astype("float32")
 
-    plt.rcParams.update({
-        "figure.facecolor":  COR_FUNDO,
-        "axes.facecolor":    COR_FUNDO,
-        "axes.edgecolor":    COR_GRADE,
-        "axes.labelcolor":   COR_TEXTO,
-        "xtick.color":       COR_TEXTO,
-        "ytick.color":       COR_TEXTO,
-        "text.color":        COR_TEXTO,
-        "grid.color":        COR_GRADE,
-        "grid.alpha":        0.5,
-        "font.family":       "monospace",
-    })
-
-    fig = plt.figure(figsize=(20, 13))
-    gs = gridspec.GridSpec(3, 1, height_ratios=[2.5, 2, 1], hspace=0.06)
-
-    ax1 = fig.add_subplot(gs[0])
-    ax2 = fig.add_subplot(gs[1], sharex=ax1)
-    ax3 = fig.add_subplot(gs[2], sharex=ax1)
-
-    fig.suptitle(
-        "EURUSD H1 — Estratégia Mean Reversion por Z-Score\n"
-        f"Janela: {JANELA_ZSCORE} candles | Entrada: |Z| >= {abs(Z_ENTRADA_VENDA):.1f} | Regime: REVERSAO",
-        color=COR_TEXTO, fontsize=13, fontweight="bold", y=0.99,
-    )
-
-    # Subconjuntos de sinais para plotagem
-    df_compra = df[df["sinal_zscore"] ==  1]
-    df_venda  = df[df["sinal_zscore"] == -1]
-    df_valido = df.dropna(subset=["zscore"])
-
-    # ── Painel 1: Preço + Marcadores de Entrada ───────────────────────────────
-    ax1.plot(df.index, df["Close"],
-             color=COR_PRECO, linewidth=0.7, alpha=0.9, label="EURUSD Close")
-
-    # Marcadores de COMPRA: triângulo apontando para cima (▲ verde)
-    ax1.scatter(
-        df_compra.index, df_compra["Close"],
-        marker="^", color=COR_COMPRA, s=40, zorder=5,
-        label=f"Compra (Z <= {Z_ENTRADA_COMPRA}) [{len(df_compra):,}]",
-        alpha=0.85,
-    )
-    # Marcadores de VENDA: triângulo apontando para baixo (▼ vermelho)
-    ax1.scatter(
-        df_venda.index, df_venda["Close"],
-        marker="v", color=COR_VENDA, s=40, zorder=5,
-        label=f"Venda (Z >= +{Z_ENTRADA_VENDA}) [{len(df_venda):,}]",
-        alpha=0.85,
-    )
-
-    ax1.set_ylabel("Preço (EURUSD)", color=COR_TEXTO, fontsize=10)
-    ax1.legend(loc="upper left", fontsize=8, framealpha=0.3)
-    ax1.grid(True, linestyle="--", alpha=0.3)
-    plt.setp(ax1.get_xticklabels(), visible=False)
-
-    # ── Painel 2: Z-Score ─────────────────────────────────────────────────────
-    idx_v = df_valido.index
-    zs    = df_valido["zscore"].values
-
-    # Zonas coloridas de fundo
-    ax2.fill_between(idx_v, zs, Z_ENTRADA_VENDA,
-                     where=(zs >= Z_ENTRADA_VENDA),
-                     color=COR_VENDA, alpha=0.15, label=f"Sobrecomprado (Z >= +{Z_ENTRADA_VENDA})")
-    ax2.fill_between(idx_v, zs, Z_ENTRADA_COMPRA,
-                     where=(zs <= Z_ENTRADA_COMPRA),
-                     color=COR_COMPRA, alpha=0.15, label=f"Sobrevendido (Z <= {Z_ENTRADA_COMPRA})")
-
-    # Linha do Z-Score
-    ax2.plot(idx_v, zs, color=COR_ZSCORE, linewidth=0.7, alpha=0.9, label="Z-Score")
-
-    # Linhas de referência tracejadas
-    for nivel, cor, ls, lw, label in [
-        ( Z_ENTRADA_VENDA,  COR_VENDA,    "--", 1.2, f"+{Z_ENTRADA_VENDA}  (Venda)"),
-        ( Z_ENTRADA_COMPRA, COR_COMPRA,   "--", 1.2, f"{Z_ENTRADA_COMPRA}  (Compra)"),
-        ( Z_STOP_VENDA,     COR_VENDA,    ":",  0.9, f"+{Z_STOP_VENDA}  (Stop Short)"),
-        ( Z_STOP_COMPRA,    COR_COMPRA,   ":",  0.9, f"{Z_STOP_COMPRA}  (Stop Long)"),
-        ( 0.0,              COR_TEXTO,    "-",  0.6, "0.0  (Média)"),
-    ]:
-        ax2.axhline(nivel, color=cor, linestyle=ls, linewidth=lw, alpha=0.8)
-        ax2.text(
-            idx_v[-1], nivel,
-            f"  {label}", color=cor, fontsize=7,
-            va="center", ha="right", alpha=0.9,
-        )
-
-    ax2.set_ylabel("Z-Score", color=COR_TEXTO, fontsize=10)
-    ax2.set_ylim(max(zs.min() - 0.5, -6), min(zs.max() + 0.5, 6))
-    ax2.legend(loc="upper left", fontsize=8, framealpha=0.3, ncol=3)
-    ax2.grid(True, linestyle="--", alpha=0.3)
-    plt.setp(ax2.get_xticklabels(), visible=False)
-
-    # ── Painel 3: Regime Hurst ────────────────────────────────────────────────
-    mapa_cor_regime = {
-        "REVERSAO":   COR_REVERSAO,
-        "TENDENCIA":  COR_TENDENCIA,
-        "INDEFINIDO": COR_INDEFINIDO,
-    }
-    mapa_num_regime = {"REVERSAO": -1, "TENDENCIA": 1, "INDEFINIDO": 0}
-
-    regime_num = df["regime"].map(mapa_num_regime).fillna(0)
-    cores_regime = df["regime"].map(mapa_cor_regime).fillna(COR_INDEFINIDO)
-
-    # Colorir barras por regime
-    for regime_nome, cor in mapa_cor_regime.items():
-        mask = df["regime"] == regime_nome
-        if mask.any():
-            ax3.bar(
-                df.index[mask], [1] * mask.sum(),
-                color=cor, alpha=0.6, width=0.04,
-                label=regime_nome,
-            )
-
-    ax3.set_ylabel("Regime", color=COR_TEXTO, fontsize=9)
-    ax3.set_xlabel("Data", color=COR_TEXTO, fontsize=10)
-    ax3.set_yticks([])
-    ax3.legend(loc="upper left", fontsize=8, framealpha=0.3, ncol=3)
-    ax3.grid(False)
-
-    fig.autofmt_xdate(rotation=30, ha="right")
-
-    plt.savefig(caminho, dpi=150, bbox_inches="tight", facecolor=COR_FUNDO)
-    plt.close()
-
-    tamanho_kb = caminho.stat().st_size / 1024
-    logger.info(f"Gráfico salvo: {caminho} ({tamanho_kb:.0f} KB)")
-
-
-# =============================================================================
-# FUNÇÃO PRINCIPAL
-# =============================================================================
-
-def calcular_e_salvar_zscore(
-    data_inicio: str = None,
-    data_fim: str = None,
-    forcar_reprocessamento: bool = False,
-) -> pd.DataFrame:
-    """
-    Pipeline principal do módulo Z-Score.
-
-    Executa em sequência:
-        1. Carrega dados H1 com Hurst (eurusd_h1_hurst.parquet)
-        2. Calcula Z-Score do preço em janela de 50 candles
-        3. Calcula Volatilidade Realizada e Stop/Target em pips
-        4. Gera sinais condicionados ao regime Hurst = "REVERSAO"
-        5. Salva DataFrame em Parquet
-        6. Gera gráfico de 3 painéis
-        7. Exibe resumo estatístico
-
-    Parâmetros:
-        data_inicio: str — filtro de início "YYYY-MM-DD" (opcional)
-        data_fim: str — filtro de fim "YYYY-MM-DD" (opcional)
-        forcar_reprocessamento: bool — recalcular mesmo que Parquet exista
-
-    Retorna:
-        DataFrame H1 com colunas Z-Score e sinais adicionadas
-
-    Levanta:
-        FileNotFoundError — se eurusd_h1_hurst.parquet não existir
-    """
-    DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
-    DIR_DATA.mkdir(parents=True, exist_ok=True)
-
-    # ── Cache ─────────────────────────────────────────────────────────────────
-    if PARQUET_SAIDA.exists() and not forcar_reprocessamento:
-        logger.info(
-            f"Parquet Z-Score já existe. Carregando cache... "
-            f"(use --forcar para recalcular)"
-        )
-        df = pd.read_parquet(PARQUET_SAIDA, engine="pyarrow")
-        if data_inicio:
-            df = df[df.index >= data_inicio]
-        if data_fim:
-            df = df[df.index <= data_fim]
-        _exibir_resumo_zscore(df)
-        return df
-
-    # ── Passo 1: Carregar dados com Hurst ─────────────────────────────────────
-    if not PARQUET_ENTRADA.exists():
-        raise FileNotFoundError(
-            f"\n{'='*60}\n"
-            f"  ERRO: Parquet de entrada não encontrado!\n"
-            f"  Esperado em: {PARQUET_ENTRADA}\n"
-            f"\n"
-            f"  Solução: Execute os módulos em ordem:\n"
-            f"    1. python data_loader.py\n"
-            f"    2. python hurst.py\n"
-            f"    3. python zscore.py  (este módulo)\n"
-            f"{'='*60}\n"
-        )
-
-    logger.info(f"Carregando dados H1 com Hurst: {PARQUET_ENTRADA.name}")
-    df = pd.read_parquet(PARQUET_ENTRADA, engine="pyarrow")
-    logger.info(f"Dados carregados: {len(df):,} candles H1")
-
-    if data_inicio:
-        df = df[df.index >= data_inicio]
-    if data_fim:
-        df = df[df.index <= data_fim]
-
-    # ── Passo 2: Calcular Z-Score do preço ────────────────────────────────────
-    df["zscore"] = calcular_zscore_rolling(df["Close"], janela=JANELA_ZSCORE)
-
-    # ── Passo 3: Calcular Volatilidade Realizada e stops em pips ─────────────
-    df["vr_pips"], df["sl_pips"], df["tp_pips"] = calcular_volatilidade_realizada(
-        df["log_return"], df["Close"], janela=JANELA_VR
-    )
-
-    # ── Passo 4: Gerar sinais condicionados ao regime ─────────────────────────
-    df["sinal_zscore"] = gerar_sinais_zscore(df["zscore"], df["regime"])
-
-    # ── Passo 5: Salvar Parquet ────────────────────────────────────────────────
-    df.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy", index=True)
-    tamanho_mb = PARQUET_SAIDA.stat().st_size / 1024 / 1024
-    logger.info(f"Parquet salvo: {PARQUET_SAIDA.name} ({tamanho_mb:.1f} MB)")
-
-    # ── Passo 6: Gerar gráfico ────────────────────────────────────────────────
-    gerar_grafico_zscore(df, GRAFICO_SAIDA)
-
-    # ── Passo 7: Exibir resumo ────────────────────────────────────────────────
-    _exibir_resumo_zscore(df)
+    logger.info("Calculando Volatilidade Realizada e Gestão de Risco (rolling 50)...")
+    # VR = std(log_retornos, janela=50, ddof=1)
+    vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
+    df["vr_pips"] = (vr * df["Close"] * 10000.0).astype("float32")
+    df["sl_pips"] = (2.0 * df["vr_pips"]).astype("float32")
+    df["tp_pips"] = (3.0 * df["vr_pips"]).astype("float32")
 
     return df
 
 
-def _exibir_resumo_zscore(df: pd.DataFrame) -> None:
+def gerar_sinais_zscore(df: pd.DataFrame) -> tuple:
     """
-    Exibe no terminal um resumo da estratégia Z-Score Mean Reversion.
-
-    Inclui:
-    - Contagem de sinais gerados por tipo (COMPRA, VENDA)
-    - Percentual do tempo com sinal ativo
-    - Estatísticas do Z-Score (min, max, std)
-    - Estatísticas de Stop Loss e Take Profit em pips
-
-    Parâmetros:
-        df: DataFrame com colunas 'zscore', 'sinal_zscore', 'sl_pips', 'tp_pips'
+    Gera sinais operacionais de Z-Score otimizados baseados no gatilho de RETORNO (cruzamento de volta).
+    LONG (+1) se zscore cruzar acima de -2.5 (vindo de <= -2.5).
+    SHORT (-1) se zscore cruzar abaixo de +2.5 (vindo de >= +2.5).
+    Filtro de Hurst estrito: hurst < 0.40.
     """
-    df_v = df.dropna(subset=["zscore"])
-    n_total  = len(df_v)
-    n_compra = (df_v["sinal_zscore"] ==  1).sum()
-    n_venda  = (df_v["sinal_zscore"] == -1).sum()
-    n_sinais = n_compra + n_venda
+    logger.info("Executando motor de geração de sinais Z-Score otimizado (Opção A)...")
 
-    sl_medio = df_v["sl_pips"].mean() if "sl_pips" in df_v.columns else float("nan")
-    tp_medio = df_v["tp_pips"].mean() if "tp_pips" in df_v.columns else float("nan")
+    # 1. Filtro de Janela Operacional (10h00-22h30, seg-sex)
+    op_window = verificar_janela_operacional(df.index)
 
-    print("\n" + "=" * 60)
-    print("  RESUMO DA ESTRATÉGIA Z-SCORE MEAN REVERSION — EURUSD H1")
-    print("=" * 60)
-    print(f"  Período analisado: "
-          f"{df_v.index.min().date()} -> {df_v.index.max().date()}")
-    print(f"  Candles com Z-Score válido: {n_total:>8,}")
-    print()
-    print(f"  ── Sinais Gerados (regime REVERSAO) ──")
-    print(f"  COMPRA  (Z <= {Z_ENTRADA_COMPRA})     : "
-          f"{n_compra:>5,} sinais ({n_compra/n_total*100:.2f}%)")
-    print(f"  VENDA   (Z >= +{Z_ENTRADA_VENDA})     : "
-          f"{n_venda:>5,} sinais ({n_venda/n_total*100:.2f}%)")
-    print(f"  TOTAL de sinais             : {n_sinais:>5,} ({n_sinais/n_total*100:.2f}%)")
-    print()
-    print(f"  ── Z-Score Estatísticas ──")
-    print(f"  Mínimo Z                    : {df_v['zscore'].min():>+.3f}")
-    print(f"  Máximo Z                    : {df_v['zscore'].max():>+.3f}")
-    print(f"  Desvio Padrão Z             : {df_v['zscore'].std():>.4f}")
-    print()
-    print(f"  ── Gestão de Risco (média) ──")
-    print(f"  Stop Loss médio             : {sl_medio:>6.1f} pips")
-    print(f"  Take Profit médio           : {tp_medio:>6.1f} pips")
-    print(f"  R:R médio                   : 1:{MULT_TP_PIPS/MULT_STOP_PIPS:.1f}")
-    print()
-    print(f"  Gráfico salvo em: graficos/zscore_sinais.png")
-    print(f"  Parquet salvo em: data/eurusd_h1_zscore.parquet")
-    print("=" * 60 + "\n")
+    # 2. Pré-condições Operacionais
+    # Usamos a coluna hurst diretamente < 0.40
+    c1_regime = (df["hurst"] < 0.40)
+    condicao_entrada = c1_regime & op_window
+
+    sinal = np.zeros(len(df), dtype=np.int8)
+    
+    # Criar shifts para calcular cruzamento de volta (RETORNO)
+    z = df["zscore"].values
+    z_prev = df["zscore"].shift(1).values
+    
+    # Gatilho de retorno: vindo de fora do limite para dentro do limite
+    z_entry = 2.5
+    
+    # LONG: no candle anterior estava <= -2.5, e no atual está > -2.5
+    cond_long = condicao_entrada & (z_prev <= -z_entry) & (z > -z_entry)
+    
+    # SHORT: no candle anterior estava >= 2.5, e no atual está < 2.5
+    cond_short = condicao_entrada & (z_prev >= z_entry) & (z < z_entry)
+    
+    # Garantir que não haja NaNs nos shifts
+    cond_long = cond_long & (~df["zscore"].isna()) & (~df["zscore"].shift(1).isna())
+    cond_short = cond_short & (~df["zscore"].isna()) & (~df["zscore"].shift(1).isna())
+    
+    sinal[cond_long] = 1
+    sinal[cond_short] = -1
+
+    df["sinal_zscore"] = sinal
+
+    # --- Estatísticas de Bloqueio ---
+    # Sinais potenciais (cruzamento de retorno sob Hurst < 0.40)
+    potencial_long = c1_regime & (z_prev <= -z_entry) & (z > -z_entry)
+    potencial_short = c1_regime & (z_prev >= z_entry) & (z < z_entry)
+    potencial = potencial_long | potencial_short
+
+    # Bloqueados apenas pelo filtro de horário
+    bloqueado_horario = potencial & (~op_window)
+
+    # Bloqueados por regime (cruzamento de retorno dentro do horário, mas com Hurst >= 0.40)
+    potencial_sem_regime = op_window & (
+        ((z_prev <= -z_entry) & (z > -z_entry)) | 
+        ((z_prev >= z_entry) & (z < z_entry))
+    )
+    bloqueado_regime = potencial_sem_regime & (~c1_regime)
+
+    stats_sinais = {
+        "compra": int(np.sum(sinal == 1)),
+        "venda": int(np.sum(sinal == -1)),
+        "bloqueado_horario": int(np.sum(bloqueado_horario)),
+        "bloqueado_regime": int(np.sum(bloqueado_regime)),
+    }
+
+    return df, stats_sinais
 
 
 # =============================================================================
-# EXECUÇÃO DIRETA (python zscore.py)
+# RELATÓRIO DE SAÍDA
+# =============================================================================
+
+def imprimir_relatorio_zscore(df: pd.DataFrame, stats_sinais: dict):
+    """
+    Imprime relatório estatístico completo e formatado.
+    """
+    sep = "═" * 70
+    sub_sep = "─" * 70
+
+    df_valid = df.dropna(subset=["zscore"])
+    total_validos = len(df_valid)
+
+    if total_validos == 0:
+        logger.error("Sem dados de Z-Score suficientes para imprimir o relatório!")
+        return
+
+    # SEÇÃO 1 — Z-Score estatísticas
+    z_min = df_valid["zscore"].min()
+    z_max = df_valid["zscore"].max()
+    z_mean = df_valid["zscore"].mean()
+    z_std = df_valid["zscore"].std()
+
+    pct_z3 = (df_valid["zscore"].abs() > 3.0).sum() / total_validos * 100
+    pct_z25 = (df_valid["zscore"].abs() > 2.5).sum() / total_validos * 100
+    pct_z2 = (df_valid["zscore"].abs() > 2.0).sum() / total_validos * 100
+
+    print(f"\n{sep}")
+    print("  SEÇÃO 1 — ESTERÍSTICAS DE Z-SCORE DO PREÇO (Série Completa)")
+    print(sep)
+    print(f"  Z-Score Médio                        : {z_mean:>12.6f}")
+    print(f"  Desvio Padrão Z-Score                : {z_std:>12.6f}")
+    print(f"  Z-Score Mínimo                       : {z_min:>12.6f}")
+    print(f"  Z-Score Máximo                       : {z_max:>12.6f}")
+    print(f"  {sub_sep}")
+    print(f"  % de candles com |Z| > 2.0 (Desvio)  : {pct_z2:>11.2f}%")
+    print(f"  % de candles com |Z| > 2.5 (Extremo) : {pct_z25:>11.2f}%")
+    print(f"  % de candles com |Z| > 3.0 (Anomalia): {pct_z3:>11.2f}%")
+
+    # SEÇÃO 2 — Sinais gerados
+    longs = stats_sinais["compra"]
+    shorts = stats_sinais["venda"]
+    ativos = longs + shorts
+    pct_ativos = (ativos / total_validos) * 100
+
+    print(f"\n{sep}")
+    print("  SEÇÃO 2 — SINAIS GERADOS (Janela Operacional)")
+    print(sep)
+    print(f"  Total de sinais de COMPRA (LONG)      : {longs:>12,}")
+    print(f"  Total de sinais de VENDA (SHORT)      : {shorts:>12,}")
+    print(f"  Total de sinais ATIVOS                : {ativos:>12,}")
+    print(f"  % do tempo com sinal ativo            : {pct_ativos:>11.2f}%")
+    print(f"  Sinais bloqueados pelo filtro horário : {stats_sinais['bloqueado_horario']:>12,}")
+    print(f"  Sinais bloqueados por regime != REVER.: {stats_sinais['bloqueado_regime']:>12,}")
+
+    # SEÇÃO 3 — Gestão de risco
+    sl_mean = df_valid["sl_pips"].mean()
+    tp_mean = df_valid["tp_pips"].mean()
+    rr_ratio = tp_mean / sl_mean if sl_mean > 0 else 0
+
+    print(f"\n{sep}")
+    print("  SEÇÃO 3 — GESTÃO DE RISCO (Baseada em Volatilidade Realizada)")
+    print(sep)
+    print(f"  Stop Loss Médio                       : {sl_mean:>12.2f} pips")
+    print(f"  Take Profit Médio                     : {tp_mean:>12.2f} pips")
+    print(f"  Relação Retorno:Risco (R:R) Confirmada:  1:{rr_ratio:.2f} (Intencional 1:1.5)")
+    print(f"{sep}\n")
+
+# =============================================================================
+# GERAÇÃO DO GRÁFICO (DARK MODE)
+# =============================================================================
+
+def gerar_grafico_zscore_sinais(df: pd.DataFrame):
+    """
+    Gera gráfico com 3 painéis em Dark Mode:
+    Painel 1: Preço EURUSD com setas de compra e venda
+    Painel 2: Oscilador Z-Score do Preço com thresholds
+    Painel 3: Coloração do Regime de Hurst
+    """
+    logger.info("Gerando gráfico analítico de Z-Score em Dark Mode...")
+
+    DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
+
+    df_plot = df.dropna(subset=["zscore", "hurst"]).tail(3000)  # Últimos 3000 candles para clareza visual
+    if len(df_plot) == 0:
+        logger.error("Sem dados de Z-Score suficientes para plotar!")
+        return
+
+    plt.style.use('dark_background')
+
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(16, 11), sharex=True, 
+                                         gridspec_kw={'height_ratios': [3, 2, 1]})
+    
+    fig.suptitle("Estratégia Mean Reversion por Z-Score — EURUSD H1", fontsize=16, fontweight='bold', color='#FFFFFF')
+    
+    times = df_plot.index
+    
+    # Cores HSL Harmoniosas
+    cor_compra = '#00E676'      # Verde
+    cor_venda = '#FF1744'       # Vermelho
+    cor_indefinido = '#555555'  # Cinza
+
+    # -------------------------------------------------------------------------
+    # PAINEL 1 — Preço Close com Marcadores
+    # -------------------------------------------------------------------------
+    ax1.plot(times, df_plot["Close"], color='#ECEFF1', linewidth=1.2, label='Preço Close')
+    
+    compras = df_plot[df_plot["sinal_zscore"] == 1]
+    vendas = df_plot[df_plot["sinal_zscore"] == -1]
+    
+    ax1.scatter(compras.index, compras["Close"] - 0.0010, color=cor_compra, marker='^', s=45, label='COMPRA (LONG)', zorder=5)
+    ax1.scatter(vendas.index, vendas["Close"] + 0.0010, color=cor_venda, marker='v', s=45, label='VENDA (SHORT)', zorder=5)
+    
+    ax1.set_ylabel("Preço EURUSD", fontsize=11, color='#CFD8DC')
+    ax1.grid(True, linestyle='--', alpha=0.1)
+    ax1.legend(loc='upper left', framealpha=0.3)
+
+    # -------------------------------------------------------------------------
+    # PAINEL 2 — Z-Score do Preço
+    # -------------------------------------------------------------------------
+    ax2.plot(times, df_plot["zscore"], color='#AB47BC', linewidth=1.0, label='Z-Score (50 bars)')
+    
+    # Linhas de entrada e stop
+    ax2.axhline(-3.0, color=cor_compra, linestyle='--', alpha=0.7, linewidth=1.0, label='Entrada Compra (-3.0)')
+    ax2.axhline(3.0, color=cor_venda, linestyle='--', alpha=0.7, linewidth=1.0, label='Entrada Venda (+3.0)')
+    ax2.axhline(-3.5, color=cor_compra, linestyle=':', alpha=0.5, linewidth=0.9, label='Stop Compra (-3.5)')
+    ax2.axhline(3.5, color=cor_venda, linestyle=':', alpha=0.5, linewidth=0.9, label='Stop Venda (+3.5)')
+    ax2.axhline(0.0, color='#ECEFF1', linestyle='--', alpha=0.3, linewidth=0.8)
+
+    # Sombreado das zonas extremas
+    ax2.fill_between(times, df_plot["zscore"], -3.0, where=(df_plot["zscore"] <= -3.0), color=cor_compra, alpha=0.2, interpolate=True)
+    ax2.fill_between(times, df_plot["zscore"], 3.0, where=(df_plot["zscore"] >= 3.0), color=cor_venda, alpha=0.2, interpolate=True)
+
+    ax2.set_ylabel("Z-Score", fontsize=11, color='#CFD8DC')
+    ax2.set_ylim(-4.2, 4.2)
+    ax2.grid(True, linestyle='--', alpha=0.1)
+    ax2.legend(loc='upper left', framealpha=0.3)
+
+    # -------------------------------------------------------------------------
+    # PAINEL 3 — Regime Hurst
+    # -------------------------------------------------------------------------
+    regimes = df_plot["regime"].to_numpy()
+    
+    for i in range(len(df_plot)):
+        reg = regimes[i]
+        cor = cor_indefinido
+        if reg == "TENDENCIA":
+            cor = cor_compra
+        elif reg == "REVERSAO":
+            cor = cor_venda
+            
+        ax3.axvspan(times[max(0, i-1)], times[i], color=cor, alpha=0.15)
+        
+    ax3.set_ylabel("Regime Hurst", fontsize=11, color='#CFD8DC')
+    ax3.get_yaxis().set_ticks([])  # Ocultar ticks
+    ax3.grid(False)
+
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.94)
+
+    plt.savefig(CAMINHO_GRAFICO, dpi=150, facecolor='#121212')
+    plt.close()
+
+    logger.info(f"Gráfico de z-score e sinais salvo em: {CAMINHO_GRAFICO.resolve()}")
+
+# =============================================================================
+# PIPELINE PRINCIPAL
+# =============================================================================
+
+def processar_pipeline_zscore(forcar: bool = False) -> pd.DataFrame:
+    """
+    Controla o pipeline de carregamento, cálculo e cache do módulo zscore.
+    """
+    if PARQUET_SAIDA.exists() and not forcar:
+        logger.info("Cache de Z-Score encontrado! Carregando parquet existente...")
+        df = pd.read_parquet(PARQUET_SAIDA, engine="pyarrow")
+
+        if not CAMINHO_GRAFICO.exists():
+            gerar_grafico_zscore_sinais(df)
+
+        # Calcular estatísticas rápidas de sinais para o relatório
+        sinal = df["sinal_zscore"].to_numpy()
+        op_window = verificar_janela_operacional(df.index)
+        c1_regime = (df["regime"] == "REVERSAO")
+        potencial = c1_regime & ((df["zscore"] <= -3.0) | (df["zscore"] >= 3.0))
+
+        stats_sinais = {
+            "compra": int(np.sum(sinal == 1)),
+            "venda": int(np.sum(sinal == -1)),
+            "bloqueado_horario": int(np.sum(potencial & (~op_window))),
+            "bloqueado_regime": int(np.sum(op_window & ((df["zscore"] <= -3.0) | (df["zscore"] >= 3.0)) & (df["regime"] != "REVERSAO"))),
+        }
+
+        imprimir_relatorio_zscore(df, stats_sinais)
+        return df
+
+    if not PARQUET_ENTRADA.exists():
+        raise FileNotFoundError(
+            f"Parquet de Hurst não encontrado: {PARQUET_ENTRADA}\n"
+            f"Execute primeiro o modulo hurst.py."
+        )
+
+    logger.info("Reprocessando base e calculando indicadores do Z-Score...")
+    df_hurst = pd.read_parquet(PARQUET_ENTRADA, engine="pyarrow")
+
+    # Passo 1-2: Calcular Z-Score e SL/TP com base em VR
+    df_calc = calcular_indicadores_zscore(df_hurst)
+
+    # Passo 3: Gerar os sinais
+    df_final, stats_sinais = gerar_sinais_zscore(df_calc)
+
+    # Salvar cache
+    logger.info(f"Salvando resultados no cache: {PARQUET_SAIDA.name}")
+    df_final.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy", index=True)
+
+    # Passo 5-6: Gerar gráfico e relatório
+    gerar_grafico_zscore_sinais(df_final)
+    imprimir_relatorio_zscore(df_final, stats_sinais)
+
+    return df_final
+
+# =============================================================================
+# FUNÇÃO UTILITÁRIA EXPORTÁVEL
+# =============================================================================
+
+def carregar_zscore() -> pd.DataFrame:
+    """
+    Carrega o parquet com zscore calculado.
+    Pode ser importada por outros módulos do sistema.
+    """
+    if not PARQUET_SAIDA.exists():
+        raise FileNotFoundError(
+            f"Parquet com Z-Score não encontrado: {PARQUET_SAIDA}\n"
+            f"Execute primeiro: python zscore.py"
+        )
+    return pd.read_parquet(PARQUET_SAIDA, engine="pyarrow")
+
+# =============================================================================
+# CLI
 # =============================================================================
 
 if __name__ == "__main__":
-    import argparse
-
     parser = argparse.ArgumentParser(
-        description="Z-Score Mean Reversion com filtro de regime Hurst — EURUSD H1",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
-Exemplos de uso:
-  python zscore.py
-  python zscore.py --inicio 2018-01-01 --fim 2026-04-10
-  python zscore.py --forcar
-        """
+        description="Módulo Mean Reversion por Z-Score — EURUSD H1",
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("--inicio", type=str, default=None,
-                        help="Data de início (YYYY-MM-DD)")
-    parser.add_argument("--fim", type=str, default=None,
-                        help="Data de fim (YYYY-MM-DD)")
-    parser.add_argument("--forcar", action="store_true",
-                        help="Forçar recálculo mesmo se Parquet existir")
-
+    parser.add_argument(
+        "--forcar",
+        action="store_true",
+        help="Forçar reprocessamento total da base de zscore"
+    )
     args = parser.parse_args()
 
-    print("\n" + "=" * 60)
-    print("  QUANT EURUSD — MÓDULO: Z-SCORE MEAN REVERSION")
-    print("  Z-Score em Janela Movel + Sinais Condicionados ao Regime")
-    print("=" * 60)
+    print("\n" + "█" * 70)
+    print("█" + " " * 68 + "█")
+    print("█   ESTRATÉGIA MEAN REVERSION POR Z-SCORE EURUSD v2             █")
+    print("█   Filtros: Hurst Reversão + Z-Score Extremo (>= 3.0 ou <= -3.0) █")
+    print("█   Sinais: Desvio Padrão do Preço (Janela 50)                     █")
+    print("█" + " " * 68 + "█")
+    print("█" * 70)
 
-    df = calcular_e_salvar_zscore(
-        data_inicio=args.inicio,
-        data_fim=args.fim,
-        forcar_reprocessamento=args.forcar,
-    )
-
-    print(f"\nConcluido! Proximo passo: execute momentum.py\n")
+    processar_pipeline_zscore(args.forcar)
+    print("✅ Módulo executado com sucesso!\n")
