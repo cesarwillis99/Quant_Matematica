@@ -82,7 +82,7 @@ PARQUET_OU       = DIR_PROJETO_V2 / "data" / "eurusd_h1_ou.parquet"
 # Parâmetros de Simulação
 CAPITAL_INICIAL    = 10_000.0   # USD
 RISCO_POR_TRADE    = 0.01       # 1% por trade
-SPREAD_PIPS        = 0.6        # Spread de 0.6 pips
+SPREAD_PIPS        = 0.5        # Spread de 0.5 pips
 VALOR_PIP_POR_LOTE = 10.0       # 10 USD por pip por lote padrão
 FATOR_PIPS         = 10_000.0   # 1 pip = 0.0001 no EURUSD
 

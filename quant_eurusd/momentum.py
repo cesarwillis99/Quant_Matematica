@@ -172,19 +172,19 @@ def gerar_sinais_momentum(df: pd.DataFrame) -> tuple:
     sinal = np.zeros(len(df), dtype=np.int8)
 
     # LONG (+1)
-    cond_long = condicao_entrada & (df["percentil_acel"] > 0.75) & (df["velocidade"] > 0.0)
+    cond_long = condicao_entrada & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)
     sinal[cond_long] = 1
 
     # SHORT (-1)
-    cond_short = condicao_entrada & (df["percentil_acel"] < 0.25) & (df["velocidade"] < 0.0)
+    cond_short = condicao_entrada & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0)
     sinal[cond_short] = -1
 
     df["sinal_momentum"] = sinal
 
     # --- Estatísticas de Bloqueio ---
     # Sinais potenciais com cinemática alinhada e sob regime de tendência
-    potencial_long = c1_regime & (df["percentil_acel"] > 0.75) & (df["velocidade"] > 0.0)
-    potencial_short = c1_regime & (df["percentil_acel"] < 0.25) & (df["velocidade"] < 0.0)
+    potencial_long = c1_regime & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)
+    potencial_short = c1_regime & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0)
     potencial = potencial_long | potencial_short
 
     # Bloqueados apenas pelo fuso/janela de horário
@@ -410,8 +410,8 @@ def processar_pipeline_momentum(forcar: bool = False) -> pd.DataFrame:
         op_window = verificar_janela_operacional(df.index)
         c1_regime = (df["regime"] == "TENDENCIA")
         c3_ruido_block = (df["entropia_shannon"] <= 0.80)
-        potencial = (c1_regime & (df["percentil_acel"] > 0.70) & (df["velocidade"] > 0.0)) | \
-                    (c1_regime & (df["percentil_acel"] < 0.30) & (df["velocidade"] < 0.0))
+        potencial = (c1_regime & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)) | \
+                    (c1_regime & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0))
         
         stats_sinais = {
             "compra": int(np.sum(sinal == 1)),

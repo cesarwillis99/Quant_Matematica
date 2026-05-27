@@ -51,7 +51,7 @@ PARQUET_ENTRADA = DIR_PROJETO / "data" / "eurusd_h1_zscore.parquet"
 
 CAPITAL_INICIAL    = 10_000.0
 RISCO_POR_TRADE    = 0.01
-SPREAD_PIPS        = 0.6  # Recalculado sob spread de 0.6 pips
+SPREAD_PIPS        = 0.5  # Recalculado sob spread de 0.5 pips
 VALOR_PIP_POR_LOTE = 10.0
 FATOR_PIPS         = 10_000.0
 

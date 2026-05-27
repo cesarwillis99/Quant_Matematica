@@ -126,7 +126,7 @@ def gerar_sinais_zscore(df: pd.DataFrame) -> tuple:
     z_prev = df["zscore"].shift(1).values
     
     # Gatilho de retorno: vindo de fora do limite para dentro do limite
-    z_entry = 2.5
+    z_entry = 2.0
     
     # LONG: no candle anterior estava <= -2.5, e no atual está > -2.5
     cond_long = condicao_entrada & (z_prev <= -z_entry) & (z > -z_entry)

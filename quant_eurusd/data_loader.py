@@ -2,7 +2,7 @@
 """
 ================================================================================
 data_loader.py — Módulo de Carregamento e Pré-Processamento de Dados EURUSD
-                  VERSÃO 2 — DEFINITIVA
+                  VERSÃO 3 — IS / OOS PASSADO / OOS FUTURO
 ================================================================================
 
 Objetivo:
@@ -59,11 +59,24 @@ DIR_PROJETO = Path(__file__).resolve().parent
 DIR_DATA    = DIR_PROJETO / "data"
 
 # Caminho padrão para o CSV de entrada (diretório pai do projeto)
-CSV_PADRAO = DIR_PROJETO.parent / "EURUSD_10ANOS.csv"
+CSV_PADRAO = DIR_PROJETO.parent / "EURUSD_13ANOS.csv"
 
 # Arquivos de saída
 PARQUET_COMPLETO     = DIR_DATA / "eurusd_h1_completo.parquet"
 PARQUET_OPERACIONAL  = DIR_DATA / "eurusd_h1_operacional.parquet"
+
+# Janelas temporais — IS e OOS
+IS_START          = pd.Timestamp("2016-01-01")
+IS_END            = pd.Timestamp("2024-01-01")
+OOS_PASSADO_START = pd.Timestamp("2013-01-01")
+OOS_PASSADO_END   = pd.Timestamp("2016-01-01")
+OOS_FUTURO_START  = pd.Timestamp("2024-01-01")
+OOS_FUTURO_END    = pd.Timestamp("2026-05-01")
+
+PARQUET_COMPLETO_OOS_PASSADO    = DIR_DATA / "eurusd_h1_completo_OOS_passado_2013_2016.parquet"
+PARQUET_OPERACIONAL_OOS_PASSADO = DIR_DATA / "eurusd_h1_operacional_OOS_passado_2013_2016.parquet"
+PARQUET_COMPLETO_OOS_FUTURO     = DIR_DATA / "eurusd_h1_completo_OOS_futuro_2024_2026.parquet"
+PARQUET_OPERACIONAL_OOS_FUTURO  = DIR_DATA / "eurusd_h1_operacional_OOS_futuro_2024_2026.parquet"
 
 # =============================================================================
 # ESTRUTURA DO CSV (MetaTrader 5 — sem cabeçalho)
@@ -677,24 +690,41 @@ def carregar_e_processar(
         csv_path = CSV_PADRAO
 
     # ─── Cache inteligente ───
-    if PARQUET_COMPLETO.exists() and PARQUET_OPERACIONAL.exists() and not forcar:
+    if (PARQUET_COMPLETO.exists() and
+        PARQUET_OPERACIONAL.exists() and
+        PARQUET_COMPLETO_OOS_PASSADO.exists() and
+        PARQUET_OPERACIONAL_OOS_PASSADO.exists() and
+        PARQUET_COMPLETO_OOS_FUTURO.exists() and
+        PARQUET_OPERACIONAL_OOS_FUTURO.exists() and
+        not forcar):
         logger.info("Cache encontrado! Carregando parquets existentes...")
         logger.info(f"  → {PARQUET_COMPLETO.name}")
         logger.info(f"  → {PARQUET_OPERACIONAL.name}")
+        logger.info(f"  → {PARQUET_COMPLETO_OOS_PASSADO.name}")
+        logger.info(f"  → {PARQUET_OPERACIONAL_OOS_PASSADO.name}")
+        logger.info(f"  → {PARQUET_COMPLETO_OOS_FUTURO.name}")
+        logger.info(f"  → {PARQUET_OPERACIONAL_OOS_FUTURO.name}")
         logger.info("Use --forcar para reprocessar do CSV")
 
         df_completo = pd.read_parquet(PARQUET_COMPLETO, engine="pyarrow")
         df_operacional = pd.read_parquet(PARQUET_OPERACIONAL, engine="pyarrow")
+        df_completo_oos_p = pd.read_parquet(PARQUET_COMPLETO_OOS_PASSADO, engine="pyarrow")
+        df_op_oos_p = pd.read_parquet(PARQUET_OPERACIONAL_OOS_PASSADO, engine="pyarrow")
+        df_completo_oos_f = pd.read_parquet(PARQUET_COMPLETO_OOS_FUTURO, engine="pyarrow")
+        df_op_oos_f = pd.read_parquet(PARQUET_OPERACIONAL_OOS_FUTURO, engine="pyarrow")
 
         print("\n" + "═" * 70)
         print("  DADOS CARREGADOS DO CACHE")
         print("═" * 70)
-        print(f"  Série completa     : {len(df_completo):>10,} candles H1")
-        print(f"  Série operacional  : {len(df_operacional):>10,} candles H1")
-        print(f"  Período            : {df_completo.index.min()} → {df_completo.index.max()}")
+        print(f"  IS (Série Completa)       : {len(df_completo):>10,} candles H1")
+        print(f"  IS (Série Operacional)    : {len(df_operacional):>10,} candles H1")
+        print(f"  OOS Passado (Completa)    : {len(df_completo_oos_p):>10,} candles H1")
+        print(f"  OOS Futuro (Completa)     : {len(df_completo_oos_f):>10,} candles H1")
         print("═" * 70)
 
-        return df_completo, df_operacional
+        return (df_completo, df_operacional,
+                df_completo_oos_p, df_op_oos_p,
+                df_completo_oos_f, df_op_oos_f)
 
     # ─── Garantir diretório de saída ───
     DIR_DATA.mkdir(parents=True, exist_ok=True)
@@ -723,60 +753,87 @@ def carregar_e_processar(
     df_h1 = calcular_log_retornos(df_h1)
 
     # ═══════════════════════════════════════════════════════════════════
-    # GERAR OS DOIS PARQUETS
+    # GERAR OS PARQUETS POR JANELA TEMPORAL
     # ═══════════════════════════════════════════════════════════════════
 
-    # ARQUIVO A — Série completa (seg-sex 00h05-23h55)
-    df_completo = df_h1.copy()
+    # ── Janela IS (treino) ──────────────────────────────────
+    mascara_is         = (df_h1.index >= IS_START) & (df_h1.index < IS_END)
+    df_completo        = df_h1[mascara_is].copy()
+    df_operacional     = filtro_horario_operacional(df_completo)
 
-    # ARQUIVO B — Série operacional (10h00-22h30, seg-sex)
-    df_operacional = filtro_horario_operacional(df_completo)
+    # ── Janela OOS Passado ──────────────────────────────────
+    mascara_oos_p      = (df_h1.index >= OOS_PASSADO_START) & (df_h1.index < OOS_PASSADO_END)
+    df_completo_oos_p  = df_h1[mascara_oos_p].copy()
+    df_op_oos_p        = filtro_horario_operacional(df_completo_oos_p)
+
+    # ── Janela OOS Futuro ───────────────────────────────────
+    mascara_oos_f      = (df_h1.index >= OOS_FUTURO_START) & (df_h1.index < OOS_FUTURO_END)
+    df_completo_oos_f  = df_h1[mascara_oos_f].copy()
+    df_op_oos_f        = filtro_horario_operacional(df_completo_oos_f)
 
     # ═══════════════════════════════════════════════════════════════════
     # VERIFICAÇÕES AUTOMÁTICAS (antes de salvar)
     # ═══════════════════════════════════════════════════════════════════
-    checks_ok = executar_verificacoes(df_completo, df_operacional)
+    print("\n>>> VERIFICAÇÕES — IS (2016-2024)")
+    executar_verificacoes(df_completo, df_operacional)
+
+    print("\n>>> VERIFICAÇÕES — OOS PASSADO (2013-2016)")
+    executar_verificacoes(df_completo_oos_p, df_op_oos_p)
+
+    print("\n>>> VERIFICAÇÕES — OOS FUTURO (2024-2026)")
+    executar_verificacoes(df_completo_oos_f, df_op_oos_f)
 
     # ═══════════════════════════════════════════════════════════════════
     # PASSO 10 — SALVAR PARQUETS
     # ═══════════════════════════════════════════════════════════════════
     logger.info(f"Salvando {PARQUET_COMPLETO.name}...")
-    df_completo.to_parquet(
-        PARQUET_COMPLETO,
-        engine="pyarrow",
-        compression="snappy",
-        index=True,
-    )
+    df_completo.to_parquet(PARQUET_COMPLETO, engine="pyarrow", compression="snappy", index=True)
 
     logger.info(f"Salvando {PARQUET_OPERACIONAL.name}...")
-    df_operacional.to_parquet(
-        PARQUET_OPERACIONAL,
-        engine="pyarrow",
-        compression="snappy",
-        index=True,
-    )
+    df_operacional.to_parquet(PARQUET_OPERACIONAL, engine="pyarrow", compression="snappy", index=True)
+
+    logger.info(f"Salvando {PARQUET_COMPLETO_OOS_PASSADO.name}...")
+    df_completo_oos_p.to_parquet(PARQUET_COMPLETO_OOS_PASSADO, engine="pyarrow", compression="snappy", index=True)
+
+    logger.info(f"Salvando {PARQUET_OPERACIONAL_OOS_PASSADO.name}...")
+    df_op_oos_p.to_parquet(PARQUET_OPERACIONAL_OOS_PASSADO, engine="pyarrow", compression="snappy", index=True)
+
+    logger.info(f"Salvando {PARQUET_COMPLETO_OOS_FUTURO.name}...")
+    df_completo_oos_f.to_parquet(PARQUET_COMPLETO_OOS_FUTURO, engine="pyarrow", compression="snappy", index=True)
+
+    logger.info(f"Salvando {PARQUET_OPERACIONAL_OOS_FUTURO.name}...")
+    df_op_oos_f.to_parquet(PARQUET_OPERACIONAL_OOS_FUTURO, engine="pyarrow", compression="snappy", index=True)
 
     # ═══════════════════════════════════════════════════════════════════
     # RELATÓRIO DETALHADO
     # ═══════════════════════════════════════════════════════════════════
-    imprimir_relatorio(
-        total_bruto=total_bruto,
-        stats_remocao=stats_remocao,
-        removidos_incompletos=removidos_incompletos,
-        df_completo=df_completo,
-        df_operacional=df_operacional,
-    )
+    print("\n" + "█"*70)
+    print("  RELATÓRIO — IS (2016–2024)")
+    print("█"*70)
+    imprimir_relatorio(total_bruto, stats_remocao, removidos_incompletos, df_completo, df_operacional)
+
+    print("\n" + "█"*70)
+    print("  RELATÓRIO — OOS PASSADO (2013–2016)")
+    print("█"*70)
+    imprimir_relatorio(total_bruto, stats_remocao, removidos_incompletos, df_completo_oos_p, df_op_oos_p)
+
+    print("\n" + "█"*70)
+    print("  RELATÓRIO — OOS FUTURO (2024–2026)")
+    print("█"*70)
+    imprimir_relatorio(total_bruto, stats_remocao, removidos_incompletos, df_completo_oos_f, df_op_oos_f)
 
     # Tamanho dos arquivos
     print(f"\n{'═' * 70}")
     print("  ARQUIVOS GERADOS")
     print("═" * 70)
-    for p in [PARQUET_COMPLETO, PARQUET_OPERACIONAL]:
+    for p in [PARQUET_COMPLETO, PARQUET_OPERACIONAL, PARQUET_COMPLETO_OOS_PASSADO, PARQUET_OPERACIONAL_OOS_PASSADO, PARQUET_COMPLETO_OOS_FUTURO, PARQUET_OPERACIONAL_OOS_FUTURO]:
         tamanho_mb = p.stat().st_size / (1024 * 1024)
         print(f"  {p.name:40s} : {tamanho_mb:>8.2f} MB")
     print("═" * 70)
 
-    return df_completo, df_operacional
+    return (df_completo, df_operacional,
+            df_completo_oos_p, df_op_oos_p,
+            df_completo_oos_f, df_op_oos_f)
 
 
 # =============================================================================
@@ -819,18 +876,62 @@ def carregar_serie_operacional() -> pd.DataFrame:
         )
     return pd.read_parquet(PARQUET_OPERACIONAL, engine="pyarrow")
 
+def carregar_completo_oos_passado() -> pd.DataFrame:
+    """
+    Carrega a série completa OOS Passado H1 do parquet.
+    """
+    if not PARQUET_COMPLETO_OOS_PASSADO.exists():
+        raise FileNotFoundError(
+            f"Parquet não encontrado: {PARQUET_COMPLETO_OOS_PASSADO}\n"
+            f"Execute: python data_loader.py --csv caminho/do/csv"
+        )
+    return pd.read_parquet(PARQUET_COMPLETO_OOS_PASSADO, engine="pyarrow")
+
+def carregar_operacional_oos_passado() -> pd.DataFrame:
+    """
+    Carrega a série operacional OOS Passado H1 do parquet.
+    """
+    if not PARQUET_OPERACIONAL_OOS_PASSADO.exists():
+        raise FileNotFoundError(
+            f"Parquet não encontrado: {PARQUET_OPERACIONAL_OOS_PASSADO}\n"
+            f"Execute: python data_loader.py --csv caminho/do/csv"
+        )
+    return pd.read_parquet(PARQUET_OPERACIONAL_OOS_PASSADO, engine="pyarrow")
+
+def carregar_completo_oos_futuro() -> pd.DataFrame:
+    """
+    Carrega a série completa OOS Futuro H1 do parquet.
+    """
+    if not PARQUET_COMPLETO_OOS_FUTURO.exists():
+        raise FileNotFoundError(
+            f"Parquet não encontrado: {PARQUET_COMPLETO_OOS_FUTURO}\n"
+            f"Execute: python data_loader.py --csv caminho/do/csv"
+        )
+    return pd.read_parquet(PARQUET_COMPLETO_OOS_FUTURO, engine="pyarrow")
+
+def carregar_operacional_oos_futuro() -> pd.DataFrame:
+    """
+    Carrega a série operacional OOS Futuro H1 do parquet.
+    """
+    if not PARQUET_OPERACIONAL_OOS_FUTURO.exists():
+        raise FileNotFoundError(
+            f"Parquet não encontrado: {PARQUET_OPERACIONAL_OOS_FUTURO}\n"
+            f"Execute: python data_loader.py --csv caminho/do/csv"
+        )
+    return pd.read_parquet(PARQUET_OPERACIONAL_OOS_FUTURO, engine="pyarrow")
+
 
 # =============================================================================
 # EXECUÇÃO DIRETA VIA CLI
 # =============================================================================
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Data Loader v2 — EURUSD M1 → H1 (Série Completa 24h FOREX)",
+        description="Data Loader v3 — EURUSD M1 → H1 (IS / OOS PASSADO / OOS FUTURO)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Exemplos de uso:
-  python data_loader.py --csv ../EURUSD_10ANOS.csv
-  python data_loader.py --csv ../EURUSD_10ANOS.csv --forcar
+  python data_loader.py --csv ../EURUSD_13ANOS.csv
+  python data_loader.py --csv ../EURUSD_13ANOS.csv --forcar
   python data_loader.py  (usa cache se existir)
         """,
     )
@@ -849,13 +950,12 @@ Exemplos de uso:
 
     print("\n" + "█" * 70)
     print("█" + " " * 68 + "█")
-    print("█   DATA LOADER v2 — EURUSD M1 → H1                               █")
-    print("█   Série Completa: Seg-Sex 00h05-23h55 (Servidor MT5)            █")
-    print("█   Série Operacional: 10h00-22h30 (Servidor MT5)                 █")
+    print("█   DATA LOADER v3 — EURUSD M1 → H1                               █")
+    print("█   IS: 2016–2024 | OOS Passado: 2013–2016 | OOS Futuro: 2024–2026█")
     print("█" + " " * 68 + "█")
     print("█" * 70)
 
-    df_completo, df_operacional = carregar_e_processar(
+    df_completo, df_operacional, df_completo_oos_p, df_op_oos_p, df_completo_oos_f, df_op_oos_f = carregar_e_processar(
         csv_path=Path(args.csv),
         forcar=args.forcar,
     )

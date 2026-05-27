@@ -53,7 +53,7 @@ PARQUET_ENTRADA = DIR_PROJETO / "data" / "eurusd_h1_ou.parquet"
 
 CAPITAL_INICIAL    = 10_000.0
 RISCO_POR_TRADE    = 0.01
-SPREAD_PIPS        = 0.6  # Calibrado sob spread de 0.6 pips da V2
+SPREAD_PIPS        = 0.5  # Calibrado sob spread de 0.5 pips da V2
 VALOR_PIP_POR_LOTE = 10.0
 FATOR_PIPS         = 10_000.0
 
