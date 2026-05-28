@@ -403,7 +403,8 @@ def processar_pipeline_momentum(forcar: bool = False) -> pd.DataFrame:
         
         # Gerar o gráfico se não existir
         if not CAMINHO_GRAFICO.exists():
-            gerar_grafico_momentum_sinais(df)
+            # gerar_grafico_momentum_sinais(df)
+            pass
             
         # Calcular estatísticas rápidas de sinais para o relatório impresso
         sinal = df["sinal_momentum"].to_numpy()
@@ -421,6 +422,7 @@ def processar_pipeline_momentum(forcar: bool = False) -> pd.DataFrame:
         }
         
         imprimir_relatorio_momentum(df, stats_sinais)
+        gerar_tabela_parametros()
         return df
 
     if not PARQUET_ENTRADA.exists():
@@ -443,9 +445,12 @@ def processar_pipeline_momentum(forcar: bool = False) -> pd.DataFrame:
     df_final.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy", index=True)
 
     # Passo 5: Gerar gráfico de sinais e relatório
-    gerar_grafico_momentum_sinais(df_final)
+    # gerar_grafico_momentum_sinais(df_final)
+    pass
     imprimir_relatorio_momentum(df_final, stats_sinais)
+    gerar_tabela_parametros()
 
+    gerar_tabela_parametros()
     return df_final
 
 # =============================================================================
@@ -467,6 +472,36 @@ def carregar_momentum() -> pd.DataFrame:
 # =============================================================================
 # CLI
 # =============================================================================
+
+
+def gerar_tabela_parametros():
+    import matplotlib.pyplot as plt
+    logger.info("Gerando gráfico da tabela de parâmetros em Dark Mode...")
+    DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.axis("off")
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'Momentum & Entropia', 'Regime Operacional': 'Tendência', 'Hurst Filtro': '> 0.50', 'Entropia Janela': 30, 'Entropia Operável': '< 0.60', 'Bloqueio Caos': '> 0.80', 'Aceleração Alvo': '> 0.80 ou < 0.20', 'Stop Loss (Risco)': '2.0x Vol', 'Take Profit (Alvo)': '5.0x Vol'}.items()]
+    tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
+    tabela.auto_set_font_size(False)
+    tabela.set_fontsize(12)
+    tabela.scale(1.2, 2.0)
+    for (row, col), cell in tabela.get_celld().items():
+        cell.set_edgecolor("#333333")
+        if row == 0:
+            cell.set_text_props(weight="bold", color="#FFFFFF", fontsize=13)
+            cell.set_facecolor("#1E4F8A")
+        else:
+            cell.set_facecolor("#121212")
+            cell.set_text_props(color="#CFD8DC")
+            if col == 0:
+                cell.set_text_props(weight="bold", color="#82AAFF")
+    fig.suptitle("Configuração de Hiperparâmetros — MOMENTUM", color="#FFFFFF", fontsize=16, fontweight="bold", y=0.95)
+    plt.tight_layout()
+    caminho = DIR_GRAFICOS / "parametros_momentum.png"
+    plt.savefig(caminho, dpi=150, facecolor="#121212")
+    plt.close()
+    logger.info(f"Tabela de parâmetros salva em: {caminho}")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(

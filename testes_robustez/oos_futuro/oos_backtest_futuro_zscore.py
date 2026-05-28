@@ -280,7 +280,7 @@ def calcular_metricas(equity_curve: pd.Series, trades: list) -> dict:
     
     pnl_usd_total = capital_final - CAPITAL_INICIAL
     dd_usd_max = (equity_curve - equity_curve.cummax()).min()
-    fator_recup = abs(pnl_usd_total / dd_usd_max) if dd_usd_max < 0 else float('inf')
+    fator_recup = pnl_usd_total / abs(dd_usd_max) if dd_usd_max < 0 else float('inf')
     
     return {
         "pnl_pct": pnl_pct, "win_rate": win_rate, "sharpe": sharpe,
@@ -313,6 +313,8 @@ def gerar_relatorio_e_grafico(metricas: dict, equity_curve: pd.Series, trades: l
 
     # 2. Gerar Tabela Metricas PNG
     fig_tbl, ax_tbl = plt.subplots(figsize=(6, 4))
+    fig_tbl.patch.set_facecolor('#121212')
+    ax_tbl.set_facecolor('#121212')
     ax_tbl.axis('tight')
     ax_tbl.axis('off')
     
@@ -332,14 +334,18 @@ def gerar_relatorio_e_grafico(metricas: dict, equity_curve: pd.Series, trades: l
     table.set_fontsize(12)
     
     for (row, col), cell in table.get_celld().items():
+        cell.set_edgecolor("#333333")
         if row == 0:
             cell.set_text_props(weight='bold', color='white')
-            cell.set_facecolor('#1e1e1e')
+            cell.set_facecolor('#1E4F8A')
         else:
-            cell.set_facecolor('#f4f4f4' if row % 2 == 0 else '#ffffff')
+            cell.set_facecolor('#121212')
+            cell.set_text_props(color='#CFD8DC')
+            if col == 0:
+                cell.set_text_props(weight='bold', color='#82AAFF')
             
     img_tbl_path = DIR_SAIDA / f"tabela_metricas_OOS_{TIPO_OOS}_{ATIVO}_{ESTRATEGIA}.png"
-    plt.savefig(img_tbl_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.savefig(img_tbl_path, dpi=150, bbox_inches='tight', facecolor='#121212')
     plt.close()
     print(f"Tabela de metricas (PNG) salva em: {img_tbl_path}")
     

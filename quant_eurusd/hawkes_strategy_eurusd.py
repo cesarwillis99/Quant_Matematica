@@ -116,6 +116,38 @@ def estimar_hawkes_mle(N_array: np.ndarray):
     return float(mu_est), float(alpha_est), float(beta_est), bool(valido)
 
 # =============================================================================
+
+def gerar_tabela_parametros():
+    import matplotlib.pyplot as plt
+    logger.info("Gerando gráfico da tabela de parâmetros em Dark Mode...")
+    DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
+    plt.style.use('dark_background')
+    fig, ax = plt.subplots(figsize=(10, 5))
+    ax.axis("off")
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'Processos de Hawkes', 'Regime Operacional': 'Tendência', 'Hurst Filtro': '> 0.55', 'Kappa (Decaimento)': 0.1, 'Janela Intensidade': 50, 'Limiar de Excitação': 1.5, 'Stop Loss (Risco)': '1.5x Vol', 'Take Profit (Alvo)': '3.0x Vol'}.items()]
+    tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
+    tabela.auto_set_font_size(False)
+    tabela.set_fontsize(12)
+    tabela.scale(1.2, 2.0)
+    
+    for (row, col), cell in tabela.get_celld().items():
+        cell.set_edgecolor("#333333")
+        if row == 0:
+            cell.set_text_props(weight="bold", color="#FFFFFF", fontsize=13)
+            cell.set_facecolor("#1E4F8A")
+        else:
+            cell.set_facecolor("#121212")
+            cell.set_text_props(color="#CFD8DC")
+            if col == 0:
+                cell.set_text_props(weight="bold", color="#82AAFF")
+                
+    fig.suptitle("Configuração de Hiperparâmetros — HAWKES", color="#FFFFFF", fontsize=16, fontweight="bold", y=0.95)
+    plt.tight_layout()
+    caminho = DIR_GRAFICOS / "parametros_hawkes.png"
+    plt.savefig(caminho, dpi=150, facecolor="#121212")
+    plt.close()
+    logger.info(f"Tabela de parâmetros salva em: {caminho}")
+
 # PIPELINE PRINCIPAL
 # =============================================================================
 

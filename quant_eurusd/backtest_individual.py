@@ -595,6 +595,7 @@ def executar_analise_periodos(df: pd.DataFrame, todas_operacoes: Dict[str, List[
 def gerar_grafico_equity_curves(
     equity_curves: Dict[str, pd.Series],
     todas_operacoes: Dict[str, List[Operacao]],
+    todas_metricas: Dict[str, dict],
     caminhos_saida: List[Path]
 ):
     """
@@ -614,13 +615,17 @@ def gerar_grafico_equity_curves(
         "font.family":       "monospace",
     })
     
-    fig, (ax1, ax2) = plt.subplots(
-        2, 1, figsize=(20, 12), sharex=True,
-        gridspec_kw={"height_ratios": [2.5, 1.2], "hspace": 0.05}
-    )
+    fig = plt.figure(figsize=(24, 12))
+    gs = fig.add_gridspec(2, 2, width_ratios=[4, 1], height_ratios=[2.5, 1.2], hspace=0.05, wspace=0.05)
     
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[1, 0], sharex=ax1)
+    ax3 = fig.add_subplot(gs[:, 1])
+    ax3.axis("off")
+    
+    titulo_estrategias = ", ".join(equity_curves.keys())
     fig.suptitle(
-        "EURUSD H1 — Equity Curves Históricas e Perfil de Drawdown (ZScore, Momentum, OU, Combinada)",
+        f"EURUSD H1 — Equity Curve e Drawdown ({titulo_estrategias})",
         color=COR_TEXTO, fontsize=14, fontweight="bold", y=0.995
     )
     
@@ -662,6 +667,24 @@ def gerar_grafico_equity_curves(
     ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.1f}%"))
     
     fig.autofmt_xdate(rotation=25, ha="right")
+    
+    # Preencher painel lateral com métricas (ax3)
+    texto_metricas = "PERFORMANCE ESTATÍSTICA\n"
+    texto_metricas += "=" * 30 + "\n\n"
+    
+    for nome, metricas in todas_metricas.items():
+        if nome not in equity_curves:
+            continue
+        texto_metricas += f"[{nome}]\n"
+        texto_metricas += f"PnL Líquido  : {metricas.get('pnl_total_pct', 0.0):.2f}%\n"
+        texto_metricas += f"Win Rate     : {metricas.get('win_rate', 0.0):.2f}%\n"
+        texto_metricas += f"Sharpe Ratio : {metricas.get('sharpe_ratio', 0.0):.2f}\n"
+        texto_metricas += f"Drawdown Max : {metricas.get('drawdown_max_pct', 0.0):.2f}%\n"
+        texto_metricas += f"Fator Recup. : {metricas.get('fator_recuperacao', 0.0):.2f}\n"
+        texto_metricas += f"Total Trades : {metricas.get('total_operacoes', 0)}\n\n"
+        
+    ax3.text(0.05, 0.95, texto_metricas, color="#CFD8DC", fontsize=11, 
+             va='top', family='monospace', bbox=dict(facecolor='#121212', edgecolor='#333333', pad=10))
     
     # Salvar nos múltiplos destinos fornecidos
     for caminho in caminhos_saida:
@@ -786,7 +809,7 @@ def processar_pipeline_backtest(estrategia: str):
     # Prepara caminhos para métricas (CSV)
     caminhos_ops = [DIR_PROJETO_V2 / "resultados" / f"operacoes_{estrategia.lower()}_eurusd.csv"]
     caminhos_met = [DIR_PROJETO_V2 / "resultados" / f"metricas_{estrategia.lower()}_eurusd.csv"]
-    gerar_grafico_equity_curves(equity_curves, todas_operacoes, caminhos_grafico)
+    gerar_grafico_equity_curves(equity_curves, todas_operacoes, todas_metricas, caminhos_grafico)
     
     salvar_arquivos_resultados(todas_operacoes, todas_metricas, caminhos_ops, caminhos_met)
     
