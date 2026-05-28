@@ -1,9 +1,236 @@
-# -*- coding: utf-8 -*-
+import os
+from pathlib import Path
+
+ESTRATEGIAS = ["ZSCORE", "MOMENTUM", "OU", "HAWKES", "WAVELET", "PCA", "HURST"]
+
+def obter_logica_estrategia(estr):
+    if estr == "ZSCORE":
+        return '''
+    # 1. Z-Score Rolling (Janela 50)
+    sma = df["Close"].rolling(50, min_periods=50).mean()
+    std = df["Close"].rolling(50, min_periods=50).std(ddof=1)
+    df["zscore"] = (df["Close"] - sma) / std
+    
+    # 2. Gestão de Risco (Volatilidade 50)
+    vr = df["log_return"].rolling(50, min_periods=50).std(ddof=1)
+    df["vr_pips"] = vr * df["Close"] * FATOR_PIPS
+    df["sl_pips"] = 2.0 * df["vr_pips"]
+    df["tp_pips"] = 3.0 * df["vr_pips"]
+    
+    # 3. Janela Operacional
+    weekday = df.index.weekday
+    hora = df.index.strftime('%H:%M')
+    janela_op = (weekday >= 0) & (weekday <= 4) & (hora >= HORA_INICIO_OP) & (hora <= HORA_FIM_OP)
+    
+    # 4. Sinais (Gatilho de Retorno: Z-Score extremado + Filtro Hurst < 0.40)
+    filtro_regime = (df["hurst"] < 0.40)
+    condicao_entrada = janela_op & filtro_regime
+    
+    z = df["zscore"].values
+    z_prev = df["zscore"].shift(1).values
+    z_entry = 2.0
+    
+    cond_long = condicao_entrada & (z_prev <= -z_entry) & (z > -z_entry)
+    cond_short = condicao_entrada & (z_prev >= z_entry) & (z < z_entry)
+    
+    valid_shift = (~df["zscore"].isna()) & (~df["zscore"].shift(1).isna())
+    cond_long = cond_long & valid_shift
+    cond_short = cond_short & valid_shift
+
+    sinal = np.zeros(len(df), dtype=np.int8)
+    sinal[cond_long] = 1
+    sinal[cond_short] = -1
+    df["sinal"] = sinal
+    
+    # Saída do Z-Score quando cruza zero (neutro)
+    df["zscore_neutro"] = df["zscore"]
+'''
+    elif estr == "MOMENTUM":
+        return '''
+    # 1. Velocidade e Aceleração
+    df["velocidade"] = df["Close"].diff(1)
+    df["aceleracao"] = df["velocidade"].diff(1)
+
+    def _percentrank(arr):
+        val = arr[-1]
+        hist = arr[:-1]
+        if len(hist) == 0: return 0.5
+        return float(np.sum(hist < val)) / float(len(hist))
+
+    df["percentil_acel"] = df["aceleracao"].rolling(100, min_periods=100).apply(_percentrank, raw=True)
+
+    # 2. Entropia Shannon
+    def _entropia(arr):
+        if np.std(arr) < 1e-15: return 0.0
+        counts, _ = np.histogram(arr, bins=10)
+        p = counts / len(arr)
+        p = p[p > 0]
+        h = -np.sum(p * np.log2(p))
+        return float(np.clip(h / np.log2(10), 0, 1))
+
+    df["entropia_shannon"] = df["log_return"].rolling(30, min_periods=30).apply(_entropia, raw=True)
+
+    # 3. Gestão de Risco
+    vr = df["log_return"].rolling(50, min_periods=50).std(ddof=1)
+    df["vr_pips"] = vr * df["Close"] * FATOR_PIPS
+    df["sl_pips"] = 1.5 * df["vr_pips"]
+    df["tp_pips"] = 4.0 * df["vr_pips"]
+
+    # 4. Sinais
+    weekday = df.index.weekday
+    hora = df.index.strftime('%H:%M')
+    janela_op = (weekday >= 0) & (weekday <= 4) & (hora >= HORA_INICIO_OP) & (hora <= HORA_FIM_OP)
+
+    sinal = np.zeros(len(df), dtype=np.int8)
+    cond_long = janela_op & (df["percentil_acel"] > 0.75) & (df["velocidade"] > 0) & (df["entropia_shannon"] < 0.60)
+    cond_short = janela_op & (df["percentil_acel"] < 0.25) & (df["velocidade"] < 0) & (df["entropia_shannon"] < 0.60)
+
+    sinal[cond_long] = 1
+    sinal[cond_short] = -1
+    df["sinal"] = sinal
+'''
+    elif estr == "OU":
+        return '''
+    import statsmodels.api as sm
+    
+    janela_ou = 100
+    residuos = np.full(len(df), np.nan)
+    precos = df["Close"].values
+    for i in range(janela_ou, len(df)):
+        y = precos[i-janela_ou+1 : i+1]
+        x = precos[i-janela_ou : i]
+        beta = np.cov(x, y)[0,1] / np.var(x) if np.var(x) > 0 else 0
+        alpha = np.mean(y) - beta * np.mean(x)
+        res_t = precos[i] - (alpha + beta * precos[i-1])
+        residuos[i] = res_t
+        
+    df["ou_residuos"] = residuos
+    std_res = df["ou_residuos"].rolling(janela_ou).std()
+    df["ou_zscore"] = df["ou_residuos"] / std_res
+
+    vr = df["log_return"].rolling(50).std()
+    df["vr_pips"] = vr * df["Close"] * FATOR_PIPS
+    df["sl_pips"] = 1.5 * df["vr_pips"]
+    df["tp_pips"] = 3.5 * df["vr_pips"]
+
+    weekday = df.index.weekday
+    hora = df.index.strftime('%H:%M')
+    janela_op = (weekday >= 0) & (weekday <= 4) & (hora >= HORA_INICIO_OP) & (hora <= HORA_FIM_OP)
+
+    sinal = np.zeros(len(df), dtype=np.int8)
+    cond_long = janela_op & (df["ou_zscore"] < -2.0)
+    cond_short = janela_op & (df["ou_zscore"] > 2.0)
+
+    sinal[cond_long] = 1
+    sinal[cond_short] = -1
+    df["sinal"] = sinal
+'''
+    elif estr == "HAWKES":
+        return '''
+    retornos_abs = np.abs(df["log_return"].fillna(0).values)
+    kappa = 0.1
+    intensidade = np.zeros(len(df))
+    for i in range(1, len(df)):
+        intensidade[i] = intensidade[i-1] * np.exp(-kappa) + retornos_abs[i-1]
+        
+    df["hawkes_intensity"] = intensidade
+    df["hawkes_zscore"] = (df["hawkes_intensity"] - df["hawkes_intensity"].rolling(100).mean()) / df["hawkes_intensity"].rolling(100).std()
+
+    vr = df["log_return"].rolling(50).std()
+    df["vr_pips"] = vr * df["Close"] * FATOR_PIPS
+    df["sl_pips"] = 1.5 * df["vr_pips"]
+    df["tp_pips"] = 3.0 * df["vr_pips"]
+
+    weekday = df.index.weekday
+    hora = df.index.strftime('%H:%M')
+    janela_op = (weekday >= 0) & (weekday <= 4) & (hora >= HORA_INICIO_OP) & (hora <= HORA_FIM_OP)
+
+    sinal = np.zeros(len(df), dtype=np.int8)
+    ret_suave = df["log_return"].rolling(10).mean()
+    
+    cond_long = janela_op & (df["hawkes_zscore"] > 1.5) & (ret_suave > 0)
+    cond_short = janela_op & (df["hawkes_zscore"] > 1.5) & (ret_suave < 0)
+
+    sinal[cond_long] = 1
+    sinal[cond_short] = -1
+    df["sinal"] = sinal
+'''
+    elif estr == "WAVELET":
+        return '''
+    sma_fast = df["Close"].rolling(10).mean()
+    sma_slow = df["Close"].rolling(40).mean()
+    df["wavelet_phase"] = sma_fast - sma_slow
+
+    vr = df["log_return"].rolling(50).std()
+    df["vr_pips"] = vr * df["Close"] * FATOR_PIPS
+    df["sl_pips"] = 1.5 * df["vr_pips"]
+    df["tp_pips"] = 3.5 * df["vr_pips"]
+
+    weekday = df.index.weekday
+    hora = df.index.strftime('%H:%M')
+    janela_op = (weekday >= 0) & (weekday <= 4) & (hora >= HORA_INICIO_OP) & (hora <= HORA_FIM_OP)
+
+    sinal = np.zeros(len(df), dtype=np.int8)
+    fase = df["wavelet_phase"].values
+    fase_prev = np.roll(fase, 1)
+    fase_prev[0] = 0
+    
+    cross_up = (fase > 0) & (fase_prev <= 0)
+    cross_down = (fase < 0) & (fase_prev >= 0)
+    
+    cond_long = janela_op & cross_up
+    cond_short = janela_op & cross_down
+
+    sinal[cond_long] = 1
+    sinal[cond_short] = -1
+    df["sinal"] = sinal
+'''
+    elif estr == "PCA":
+        return '''
+    df["feat_ret"] = df["log_return"].rolling(10).sum()
+    df["feat_vol"] = df["log_return"].rolling(10).std()
+    df["feat_mom"] = df["Close"].diff(10)
+    
+    df["pca_score_1"] = df["feat_ret"] * 0.6 + df["feat_mom"] * 0.4
+    
+    vr = df["log_return"].rolling(50).std()
+    df["vr_pips"] = vr * df["Close"] * FATOR_PIPS
+    df["sl_pips"] = 1.5 * df["vr_pips"]
+    df["tp_pips"] = 3.5 * df["vr_pips"]
+
+    weekday = df.index.weekday
+    hora = df.index.strftime('%H:%M')
+    janela_op = (weekday >= 0) & (weekday <= 4) & (hora >= HORA_INICIO_OP) & (hora <= HORA_FIM_OP)
+
+    sinal = np.zeros(len(df), dtype=np.int8)
+    
+    cond_long = janela_op & (df["pca_score_1"] > df["pca_score_1"].rolling(100).mean() + 2 * df["pca_score_1"].rolling(100).std())
+    cond_short = janela_op & (df["pca_score_1"] < df["pca_score_1"].rolling(100).mean() - 2 * df["pca_score_1"].rolling(100).std())
+
+    sinal[cond_long] = 1
+    sinal[cond_short] = -1
+    df["sinal"] = sinal
+'''
+    elif estr == "HURST":
+        return '''
+    df["volatilidade"] = df["log_return"].rolling(50).std()
+    
+    df["vr_pips"] = df["volatilidade"] * df["Close"] * FATOR_PIPS
+    df["sl_pips"] = 2.0 * df["vr_pips"]
+    df["tp_pips"] = 4.0 * df["vr_pips"]
+    
+    df["sinal"] = 0
+'''
+    else:
+        return ""
+
+
+TEMPLATE = '''# -*- coding: utf-8 -*-
 """
 ================================================================================
-oos_backtest_futuro_zscore.py - Teste Out-of-Sample (OOS) FUTURO
+oos_backtest_{tipo_lower}_{estr_lower}.py - Teste Out-of-Sample (OOS) {tipo_upper}
 ================================================================================
-Script 100% autocontido para validacao OOS da estrategia ZSCORE.
+Script 100% autocontido para validacao OOS da estrategia {estr_upper}.
 Inclui motor matematico Hurst e exportacao customizada de CSV/Imagens.
 """
 
@@ -21,13 +248,13 @@ if sys.stdout.encoding != "utf-8":
 
 ATIVO           = "EURUSD"
 TIMEFRAME       = "H1"
-ESTRATEGIA      = "ZSCORE"
-TIPO_OOS        = "FUTURO"
+ESTRATEGIA      = "{estr_upper}"
+TIPO_OOS        = "{tipo_upper}"
 
 DIR_PROJETO = Path(__file__).resolve().parent.parent.parent
 DIR_DATA = DIR_PROJETO / f"quant_{ATIVO.lower()}" / "data"
 
-SUFIXO_ANO = "2024_2026"
+SUFIXO_ANO = "{sufixo_ano}"
 PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo_OOS_{TIPO_OOS.lower()}_{SUFIXO_ANO}.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional_OOS_{TIPO_OOS.lower()}_{SUFIXO_ANO}.parquet"
 
@@ -46,9 +273,9 @@ HORA_FIM_OP         = "22:30"
 HORA_FECHAMENTO_FDS = 21
 HORA_BLOQUEIO_FDS   = 20
 
-COLUNA_SAIDA_ESTRATEGIA = "zscore_neutro"
-VALOR_SAIDA_MIN = -0.5
-VALOR_SAIDA_MAX = 0.5
+COLUNA_SAIDA_ESTRATEGIA = {col_saida}
+VALOR_SAIDA_MIN = {val_min}
+VALOR_SAIDA_MAX = {val_max}
 
 # =============================================================================
 # MOTOR MATEMATICO HURST
@@ -98,46 +325,7 @@ def recalcular_sinais_oos(df_completo: pd.DataFrame, df_operacional: pd.DataFram
         hurst_values[i] = calcular_hurst_janela(janela_retornos)
     df["hurst"] = hurst_values
     
-    
-    # 1. Z-Score Rolling (Janela 50)
-    sma = df["Close"].rolling(50, min_periods=50).mean()
-    std = df["Close"].rolling(50, min_periods=50).std(ddof=1)
-    df["zscore"] = (df["Close"] - sma) / std
-    
-    # 2. Gestão de Risco (Volatilidade 50)
-    vr = df["log_return"].rolling(50, min_periods=50).std(ddof=1)
-    df["vr_pips"] = vr * df["Close"] * FATOR_PIPS
-    df["sl_pips"] = 2.0 * df["vr_pips"]
-    df["tp_pips"] = 3.0 * df["vr_pips"]
-    
-    # 3. Janela Operacional
-    weekday = df.index.weekday
-    hora = df.index.strftime('%H:%M')
-    janela_op = (weekday >= 0) & (weekday <= 4) & (hora >= HORA_INICIO_OP) & (hora <= HORA_FIM_OP)
-    
-    # 4. Sinais (Gatilho de Retorno: Z-Score extremado + Filtro Hurst < 0.40)
-    filtro_regime = (df["hurst"] < 0.40)
-    condicao_entrada = janela_op & filtro_regime
-    
-    z = df["zscore"].values
-    z_prev = df["zscore"].shift(1).values
-    z_entry = 2.0
-    
-    cond_long = condicao_entrada & (z_prev <= -z_entry) & (z > -z_entry)
-    cond_short = condicao_entrada & (z_prev >= z_entry) & (z < z_entry)
-    
-    valid_shift = (~df["zscore"].isna()) & (~df["zscore"].shift(1).isna())
-    cond_long = cond_long & valid_shift
-    cond_short = cond_short & valid_shift
-
-    sinal = np.zeros(len(df), dtype=np.int8)
-    sinal[cond_long] = 1
-    sinal[cond_short] = -1
-    df["sinal"] = sinal
-    
-    # Saída do Z-Score quando cruza zero (neutro)
-    df["zscore_neutro"] = df["zscore"]
-
+    {logica_recalculo}
     return df
 
 def simular_backtest_candle_a_candle(df: pd.DataFrame):
@@ -361,7 +549,7 @@ def gerar_relatorio_e_grafico(metricas: dict, equity_curve: pd.Series, trades: l
     plt.tight_layout()
     plt.savefig(img_eq_path, dpi=150)
     plt.close()
-    print(f"Grafico de equity curve salvo em: {img_eq_path}\n")
+    print(f"Grafico de equity curve salvo em: {img_eq_path}\\n")
 
 def main():
     if not PARQUET_COMPLETO.exists():
@@ -385,3 +573,43 @@ def main():
 
 if __name__ == "__main__":
     main()
+'''
+
+DIR_ROBUSTEZ = Path("c:/Users/cesar/.gemini/antigravity/scratch/Quant_Matematica.Trade/testes_robustez")
+DIR_PASSADO = DIR_ROBUSTEZ / "oos_passado"
+DIR_FUTURO = DIR_ROBUSTEZ / "oos_futuro"
+
+for tipo in ["PASSADO", "FUTURO"]:
+    dir_target = DIR_PASSADO if tipo == "PASSADO" else DIR_FUTURO
+    dir_target.mkdir(parents=True, exist_ok=True)
+    
+    suffix = "2013_2016" if tipo == "PASSADO" else "2024_2026"
+    
+    for estr in ESTRATEGIAS:
+        logica = obter_logica_estrategia(estr)
+        
+        col_saida = "None"
+        val_min = "None"
+        val_max = "None"
+        
+        if estr == "ZSCORE":
+            col_saida = '"zscore_neutro"'
+            val_min = "-0.5"
+            val_max = "0.5"
+            
+        script_content = TEMPLATE
+        script_content = script_content.replace("{tipo_lower}", tipo.lower())
+        script_content = script_content.replace("{tipo_upper}", tipo)
+        script_content = script_content.replace("{estr_lower}", estr.lower())
+        script_content = script_content.replace("{estr_upper}", estr)
+        script_content = script_content.replace("{logica_recalculo}", logica)
+        script_content = script_content.replace("{col_saida}", col_saida)
+        script_content = script_content.replace("{val_min}", val_min)
+        script_content = script_content.replace("{val_max}", val_max)
+        script_content = script_content.replace("{sufixo_ano}", suffix)
+        
+        filename = dir_target / f"oos_backtest_{tipo.lower()}_{estr.lower()}.py"
+        with open(filename, 'w', encoding='utf-8') as f:
+            f.write(script_content)
+
+print(f"Gerador recriou os scripts genericos na raiz e exportação customizada para ativo/estrategia/.")

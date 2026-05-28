@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 ================================================================================
-oos_backtest_futuro_hurst.py — Teste Out-of-Sample (OOS) FUTURO
+oos_backtest_futuro_hurst.py - Teste Out-of-Sample (OOS) FUTURO
 ================================================================================
-Script 100% autocontido para validação OOS da estratégia HURST.
-Nenhuma dependência externa ao projeto além das bibliotecas padrão.
+Script 100% autocontido para validacao OOS da estrategia HURST.
+Inclui motor matematico Hurst e exportacao customizada de CSV/Imagens.
 """
 
 import math
@@ -13,10 +13,11 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from pathlib import Path
+import sys
 
-# ═══════════════════════════════════════════════
-# CONFIGURAÇÃO DO TESTE OOS — EDITAR AQUI
-# ═══════════════════════════════════════════════
+# Corrige encoding de stdout para Windows
+if sys.stdout.encoding != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8")
 
 ATIVO           = "EURUSD"
 TIMEFRAME       = "H1"
@@ -24,72 +25,102 @@ ESTRATEGIA      = "HURST"
 TIPO_OOS        = "FUTURO"
 
 DIR_PROJETO = Path(__file__).resolve().parent.parent.parent
-DIR_DATA = DIR_PROJETO / "quant_eurusd" / "data"
+DIR_DATA = DIR_PROJETO / f"quant_{ATIVO.lower()}" / "data"
 
-PARQUET_COMPLETO    = DIR_DATA / f"{{ATIVO.lower()}}_{{TIMEFRAME.lower()}}_completo_OOS_futuro.parquet"
-PARQUET_OPERACIONAL = DIR_DATA / f"{{ATIVO.lower()}}_{{TIMEFRAME.lower()}}_operacional_OOS_futuro.parquet"
+SUFIXO_ANO = "2024_2026"
+PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo_OOS_{TIPO_OOS.lower()}_{SUFIXO_ANO}.parquet"
+PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional_OOS_{TIPO_OOS.lower()}_{SUFIXO_ANO}.parquet"
 
-# Parâmetros Operacionais Fixos (Treinamento)
+DIR_BASE_OOS = Path(__file__).resolve().parent
+DIR_SAIDA = DIR_BASE_OOS / ATIVO.lower() / ESTRATEGIA.lower()
+DIR_SAIDA.mkdir(parents=True, exist_ok=True)
+
 CAPITAL_INICIAL     = 10_000.0
 RISCO_POR_TRADE     = 0.01
 SPREAD_PIPS         = 1.2
 VALOR_PIP_POR_LOTE  = 10.0
 FATOR_PIPS          = 10_000
 
-# Horário operacional (Servidor MT5)
 HORA_INICIO_OP      = "10:00"
 HORA_FIM_OP         = "22:30"
 HORA_FECHAMENTO_FDS = 21
 HORA_BLOQUEIO_FDS   = 20
 
-# Saída por sinal específico
 COLUNA_SAIDA_ESTRATEGIA = None
 VALOR_SAIDA_MIN = None
 VALOR_SAIDA_MAX = None
 
-# ═══════════════════════════════════════════════
-# FIM DA CONFIGURAÇÃO
-# ═══════════════════════════════════════════════
+# =============================================================================
+# MOTOR MATEMATICO HURST
+# =============================================================================
+def _quick_ols_slope(x: np.ndarray, y: np.ndarray) -> float:
+    x_mean = x.mean()
+    y_mean = y.mean()
+    num = ((x - x_mean) * (y - y_mean)).sum()
+    den = ((x - x_mean) ** 2).sum()
+    if den == 0: return np.nan
+    return num / den
+
+def calcular_hurst_janela(retornos: np.ndarray) -> float:
+    if len(retornos) < 100: return np.nan
+    log_n, log_rs = [], []
+    for n in [10, 20, 40, 80]:
+        num_segmentos = 100 // n
+        rs_segmentos = []
+        for k in range(num_segmentos):
+            segmento = retornos[k * n : (k + 1) * n]
+            mu = segmento.mean()
+            y_t = np.cumsum(segmento - mu)
+            r_range = y_t.max() - y_t.min()
+            s_std = segmento.std(ddof=1)
+            if s_std == 0: return np.nan
+            rs_segmentos.append(r_range / s_std)
+        rs_medio = np.mean(rs_segmentos)
+        if rs_medio > 0:
+            log_n.append(np.log(n))
+            log_rs.append(np.log(rs_medio))
+    if len(log_n) < 2: return np.nan
+    h = _quick_ols_slope(np.array(log_n), np.array(log_rs))
+    if np.isnan(h) or h < 0.0 or h > 1.5: return np.nan
+    return h
+
+# =============================================================================
 
 def recalcular_sinais_oos(df_completo: pd.DataFrame, df_operacional: pd.DataFrame) -> pd.DataFrame:
-    """
-    Recalcula os sinais da estratégia HURST sobre o período OOS
-    usando os MESMOS parâmetros do treinamento.
-    """
     df = df_completo.copy()
     
-    # Hurst é primariamente um Árbitro de Regime (não emite sinais de compra/venda diretos)
-    # Por isso, vamos gerar um sinal Neutro ou Seguidor de Tendência simplificado OOS.
+    print("Calculando Regime de Hurst OOS (Janela 100)... Isso pode levar alguns segundos.")
+    retornos = df["log_return"].fillna(0).to_numpy()
+    n_candles = len(df)
+    hurst_values = np.full(n_candles, np.nan, dtype=np.float32)
+    for i in range(99, n_candles):
+        janela_retornos = retornos[i - 99 : i + 1]
+        hurst_values[i] = calcular_hurst_janela(janela_retornos)
+    df["hurst"] = hurst_values
     
-    # 1. Retornos e Variância OOS
+    
     df["volatilidade"] = df["log_return"].rolling(50).std()
     
-    # 2. Gestão de Risco
     df["vr_pips"] = df["volatilidade"] * df["Close"] * FATOR_PIPS
     df["sl_pips"] = 2.0 * df["vr_pips"]
     df["tp_pips"] = 4.0 * df["vr_pips"]
     
-    # 3. Sinais vazios para Hurst (Usado apenas como filtro normalmente)
     df["sinal"] = 0
 
     return df
 
 def simular_backtest_candle_a_candle(df: pd.DataFrame):
-    """
-    Simula o preenchimento de ordens candle a candle, respeitando SL, TP,
-    bloqueios de final de semana e métricas de conta.
-    """
     capital = CAPITAL_INICIAL
     equity_curve = []
     trades = []
     
-    posicao = 0  # 1 = LONG, -1 = SHORT, 0 = FLAT
+    posicao = 0 
     preco_entrada = 0.0
     sl_preco = 0.0
     tp_preco = 0.0
     lote = 0.0
+    data_entrada = None
     
-    # Extrair vetores para acesso rápido
     times = df.index
     opens = df["Open"].values
     highs = df["High"].values
@@ -99,7 +130,6 @@ def simular_backtest_candle_a_candle(df: pd.DataFrame):
     sls_pips = df["sl_pips"].values
     tps_pips = df["tp_pips"].values
     
-    # Variáveis de saída por estratégia (se configurado)
     if COLUNA_SAIDA_ESTRATEGIA is not None and COLUNA_SAIDA_ESTRATEGIA in df.columns:
         valores_saida_estr = df[COLUNA_SAIDA_ESTRATEGIA].values
     else:
@@ -117,13 +147,11 @@ def simular_backtest_candle_a_candle(df: pd.DataFrame):
         eh_sexta_fechamento = eh_sexta and hr == HORA_FECHAMENTO_FDS
         bloqueio_entrada = (eh_sexta and hr >= HORA_BLOQUEIO_FDS) or (wd == 5) or (wd == 6 and hr < 21)
         
-        # 1. PROCESSAR SAÍDAS
         if posicao != 0:
             fechou = False
             preco_saida = 0.0
             motivo = ""
             
-            # Checagem de saída customizada
             saida_estr_ativa = False
             if COLUNA_SAIDA_ESTRATEGIA is not None:
                 val = valores_saida_estr[i]
@@ -165,15 +193,21 @@ def simular_backtest_candle_a_candle(df: pd.DataFrame):
                 capital += pnl_usd
                 
                 trades.append({
-                    "entrada": preco_entrada, "saida": preco_saida, 
-                    "pnl_usd": pnl_usd, "motivo": motivo
+                    "data_entrada": data_entrada,
+                    "data_saida": t_time,
+                    "direcao": "LONG" if posicao == 1 else "SHORT",
+                    "preco_entrada": preco_entrada,
+                    "preco_saida": preco_saida,
+                    "lote": lote,
+                    "pnl_usd": pnl_usd,
+                    "motivo": motivo
                 })
                 posicao = 0
         
-        # 2. PROCESSAR ENTRADAS
         if posicao == 0 and sinais[i] != 0 and not bloqueio_entrada:
             posicao = sinais[i]
             preco_entrada = opens[i+1]
+            data_entrada = times[i+1]
             
             sl_p = sls_pips[i]
             tp_p = tps_pips[i]
@@ -200,12 +234,12 @@ def simular_backtest_candle_a_candle(df: pd.DataFrame):
 def calcular_metricas(equity_curve: pd.Series, trades: list) -> dict:
     capital_final = equity_curve.iloc[-1]
     pnl_pct = ((capital_final - CAPITAL_INICIAL) / CAPITAL_INICIAL) * 100
-    
     total_trades = len(trades)
     trades_ganhos = sum(1 for t in trades if t["pnl_usd"] > 0)
     win_rate = (trades_ganhos / total_trades * 100) if total_trades > 0 else 0.0
     
-    retornos_diarios = equity_curve.resample("1D").last().pct_change().dropna()
+    retornos_diarios = equity_curve.resample("1D").last().pct_change()
+    retornos_diarios = retornos_diarios.fillna(0.0)
     std_diario = retornos_diarios.std()
     sharpe = (retornos_diarios.mean() / std_diario) * math.sqrt(252) if std_diario > 0 else 0.0
     
@@ -224,24 +258,64 @@ def calcular_metricas(equity_curve: pd.Series, trades: list) -> dict:
         "dd_serie": dd_serie
     }
 
-def gerar_relatorio_e_grafico(metricas: dict, equity_curve: pd.Series):
+def gerar_relatorio_e_grafico(metricas: dict, equity_curve: pd.Series, trades: list):
     print("=" * 60)
-    print(f"  TESTE OOS {TIPO_OOS} — {ATIVO} {TIMEFRAME}")
-    print(f"  Estratégia: {ESTRATEGIA}")
-    print(f"  Período: {equity_curve.index[0].date()} → {equity_curve.index[-1].date()}")
+    print(f"  TESTE OOS {TIPO_OOS} - {ATIVO} {TIMEFRAME}")
+    print(f"  Estrategia: {ESTRATEGIA}")
+    print(f"  Periodo: {equity_curve.index[0].date()} -> {equity_curve.index[-1].date()}")
     print("=" * 60)
     print(f"  PnL %              : {metricas['pnl_pct']:>+10.2f}%")
     print(f"  Win Rate           : {metricas['win_rate']:>10.2f}%")
     print(f"  Sharpe Ratio       : {metricas['sharpe']:>+10.4f}")
-    print(f"  Drawdown Máximo    : {metricas['dd_pct']:>10.2f}%")
-    print(f"  Fator Recuperação  : {metricas['fator_recup']:>10.3f}x")
+    print(f"  Drawdown Maximo    : {metricas['dd_pct']:>10.2f}%")
+    print(f"  Fator Recuperacao  : {metricas['fator_recup']:>10.3f}x")
     print(f"  Total de Trades    : {metricas['total_trades']:>10,}")
     print(f"  Capital Final      : ${metricas['capital_final']:>10,.2f}")
     print("=" * 60)
     
+    # 1. Salvar CSV Operacoes
+    if trades:
+        df_trades = pd.DataFrame(trades)
+        csv_path = DIR_SAIDA / f"operacoes_OOS_{TIPO_OOS}_{ATIVO}_{ESTRATEGIA}.csv"
+        df_trades.to_csv(csv_path, index=False)
+        print(f"CSV de operacoes salvo em: {csv_path}")
+
+    # 2. Gerar Tabela Metricas PNG
+    fig_tbl, ax_tbl = plt.subplots(figsize=(6, 4))
+    ax_tbl.axis('tight')
+    ax_tbl.axis('off')
+    
+    dados_tabela = [
+        ["PnL (%)", f"{metricas['pnl_pct']:.2f}%"],
+        ["Win Rate", f"{metricas['win_rate']:.2f}%"],
+        ["Sharpe Ratio", f"{metricas['sharpe']:.4f}"],
+        ["Drawdown Máx", f"{metricas['dd_pct']:.2f}%"],
+        ["Fator Recup.", f"{metricas['fator_recup']:.3f}x"],
+        ["Total Trades", f"{metricas['total_trades']}"],
+        ["Capital Final", f"${metricas['capital_final']:.2f}"]
+    ]
+    
+    table = ax_tbl.table(cellText=dados_tabela, colLabels=["Métrica", "Valor OOS"], loc='center', cellLoc='center')
+    table.scale(1, 2.5)
+    table.auto_set_font_size(False)
+    table.set_fontsize(12)
+    
+    for (row, col), cell in table.get_celld().items():
+        if row == 0:
+            cell.set_text_props(weight='bold', color='white')
+            cell.set_facecolor('#1e1e1e')
+        else:
+            cell.set_facecolor('#f4f4f4' if row % 2 == 0 else '#ffffff')
+            
+    img_tbl_path = DIR_SAIDA / f"tabela_metricas_OOS_{TIPO_OOS}_{ATIVO}_{ESTRATEGIA}.png"
+    plt.savefig(img_tbl_path, dpi=150, bbox_inches='tight', facecolor='white')
+    plt.close()
+    print(f"Tabela de metricas (PNG) salva em: {img_tbl_path}")
+    
+    # 3. Gerar Grafico Equity Curve
     plt.style.use('dark_background')
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), gridspec_kw={{'height_ratios': [3, 1]}})
-    fig.suptitle(f"OOS {TIPO_OOS} — {ATIVO} {TIMEFRAME} — {ESTRATEGIA}", fontsize=14)
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), gridspec_kw={"height_ratios": [3, 1]})
+    fig.suptitle(f"OOS {TIPO_OOS} - {ATIVO} {TIMEFRAME} - {ESTRATEGIA}", fontsize=14)
     
     cor_equity = '#00E676' if metricas['pnl_pct'] >= 0 else '#FF1744'
     ax1.plot(equity_curve.index, equity_curve, color=cor_equity, linewidth=1.5)
@@ -252,34 +326,31 @@ def gerar_relatorio_e_grafico(metricas: dict, equity_curve: pd.Series):
     ax2.set_ylabel("Drawdown (%)")
     ax2.grid(True, alpha=0.1)
     
-    nome_grafico = f"equity_curve_OOS_{TIPO_OOS}_{ATIVO}_{ESTRATEGIA}.png"
+    img_eq_path = DIR_SAIDA / f"equity_curve_OOS_{TIPO_OOS}_{ATIVO}_{ESTRATEGIA}.png"
     plt.tight_layout()
-    plt.savefig(nome_grafico, dpi=150)
-    print(f"\nGráfico salvo em: {nome_grafico}")
+    plt.savefig(img_eq_path, dpi=150)
+    plt.close()
+    print(f"Grafico de equity curve salvo em: {img_eq_path}\n")
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--estrategia", type=str, default=ESTRATEGIA)
-    args = parser.parseargs() if hasattr(parser, "parseargs") else parser.parse_args()
-    
     if not PARQUET_COMPLETO.exists():
-        print(f"ERRO: Parquet completo não encontrado em {PARQUET_COMPLETO}")
+        print(f"ERRO: Parquet completo nao encontrado em {PARQUET_COMPLETO}")
         return
     if not PARQUET_OPERACIONAL.exists():
-        print(f"ERRO: Parquet operacional não encontrado em {PARQUET_OPERACIONAL}")
+        print(f"ERRO: Parquet operacional nao encontrado em {PARQUET_OPERACIONAL}")
         return
         
     df_comp = pd.read_parquet(PARQUET_COMPLETO)
     df_oper = pd.read_parquet(PARQUET_OPERACIONAL)
     
-    print(f"Iniciando cálculo de sinais OOS para {ESTRATEGIA}...")
+    print(f"Iniciando calculo de sinais OOS para {ESTRATEGIA}...")
     df_sinais = recalcular_sinais_oos(df_comp, df_oper)
     
-    print("Iniciando simulação candle-a-candle...")
+    print("Iniciando simulacao candle-a-candle...")
     equity_curve, trades = simular_backtest_candle_a_candle(df_sinais)
     
     metricas = calcular_metricas(equity_curve, trades)
-    gerar_relatorio_e_grafico(metricas, equity_curve)
+    gerar_relatorio_e_grafico(metricas, equity_curve, trades)
 
 if __name__ == "__main__":
     main()
