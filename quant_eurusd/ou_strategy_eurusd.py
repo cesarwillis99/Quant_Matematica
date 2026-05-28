@@ -284,8 +284,8 @@ def calcular_gestao_risco(df: pd.DataFrame) -> pd.DataFrame:
         
     vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
     df["vr_pips"] = (vr * df["Close"] * 10000.0).astype(np.float32)
-    df["sl_pips"] = (2.0 * df["vr_pips"]).astype(np.float32)
-    df["tp_pips"] = (3.0 * df["vr_pips"]).astype(np.float32)
+    df["sl_pips"] = (3.0 * df["vr_pips"]).astype(np.float32)
+    df["tp_pips"] = (2.0 * df["vr_pips"]).astype(np.float32)
     
     return df
 
