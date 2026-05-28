@@ -53,7 +53,7 @@ PASSO_MLE = 24  # Otimizar a cada 24 candles (1 dia aprox)
 JANELA_VOL = 50
 
 # Thresholds operacionais OTIMIZADOS
-EXCITACAO_MAXIMA = 0.65
+EXCITACAO_MAXIMA = 0.75
 LAMBDA_NORM_MIN_SINAL = 3.0
 LAMBDA_NORM_SAIDA = 0.6
 
@@ -120,11 +120,11 @@ def estimar_hawkes_mle(N_array: np.ndarray):
 def gerar_tabela_parametros():
     import matplotlib.pyplot as plt
     logger.info("Gerando gráfico da tabela de parâmetros em Dark Mode...")
-    DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
+    GRAFICO_SAIDA.parent.mkdir(parents=True, exist_ok=True)
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.axis("off")
-    dados = [[k, str(v)] for k, v in {'Estratégia': 'Processos de Hawkes', 'Regime Operacional': 'Tendência', 'Hurst Filtro': '> 0.55', 'Kappa (Decaimento)': 0.1, 'Janela Intensidade': 50, 'Limiar de Excitação': 1.5, 'Stop Loss (Risco)': '1.5x Vol', 'Take Profit (Alvo)': '3.0x Vol'}.items()]
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'Processo de Hawkes', 'Regime Operacional': 'Reversão de Extremos', 'Janela MLE': 120, 'Intensidade λ Mínima': 3.0, 'Excitação α/β Máx': 0.75, 'Stop Loss (Risco)': '2.5x Vol', 'Take Profit (Alvo)': '2.0x Vol'}.items()]
     tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
     tabela.auto_set_font_size(False)
     tabela.set_fontsize(12)
@@ -143,7 +143,7 @@ def gerar_tabela_parametros():
                 
     fig.suptitle("Configuração de Hiperparâmetros — HAWKES", color="#FFFFFF", fontsize=16, fontweight="bold", y=0.95)
     plt.tight_layout()
-    caminho = DIR_GRAFICOS / "parametros_hawkes.png"
+    caminho = GRAFICO_SAIDA.parent / "parametros_hawkes.png"
     plt.savefig(caminho, dpi=150, facecolor="#121212")
     plt.close()
     logger.info(f"Tabela de parâmetros salva em: {caminho}")
@@ -258,8 +258,8 @@ def executar_pipeline_hawkes():
     df["VR"] = df["R_t"].rolling(window=JANELA_VOL).std(ddof=1)
     df["vr_pips"] = df["VR"] * df["Close"] * 10000.0
     
-    df["sl_pips"] = 2.0 * df["vr_pips"]
-    df["tp_pips"] = 3.0 * df["vr_pips"]
+    df["sl_pips"] = 2.5 * df["vr_pips"]
+    df["tp_pips"] = 2.0 * df["vr_pips"]
     df["sl_pips"] = df["sl_pips"].clip(lower=3.0, upper=60.0).fillna(10.0)
     df["tp_pips"] = df["tp_pips"].clip(lower=4.5, upper=90.0).fillna(15.0)
     

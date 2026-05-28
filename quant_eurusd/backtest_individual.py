@@ -12,7 +12,7 @@ Objetivo:
 Mecânica do Backtest:
     - Iteração candle a candle sobre toda a base EURUSD H1
     - 1 posição aberta por vez
-    - Spread fixo de 0.5 pips por operação
+    - Spread fixo de 0.5 pips por operação (conservador para H1)
     - Sem slippage adicional (conservador para H1)
     - Capital inicial: 10.000 USD
     - Risco por operação: 1% do capital atual (position sizing dinâmico)

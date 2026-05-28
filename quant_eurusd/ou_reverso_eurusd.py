@@ -284,8 +284,8 @@ def calcular_gestao_risco(df: pd.DataFrame) -> pd.DataFrame:
         
     vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
     df["vr_pips"] = (vr * df["Close"] * 10000.0).astype(np.float32)
-    df["sl_pips"] = (3.0 * df["vr_pips"]).astype(np.float32)
-    df["tp_pips"] = (2.0 * df["vr_pips"]).astype(np.float32)
+    df["sl_pips"] = (2.5 * df["vr_pips"]).astype(np.float32)
+    df["tp_pips"] = (1.5 * df["vr_pips"]).astype(np.float32)
     
     return df
 
@@ -303,23 +303,23 @@ def gerar_sinais_ou(df: pd.DataFrame, bloqueados_ou_invalido: int) -> tuple:
     op_window = verificar_janela_operacional(df.index)
     
     # Condições de entrada obrigatórias
-    cond_operacional = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 50.0) & op_window
+    cond_operacional = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 40.0) & op_window
     
     sinal = np.zeros(len(df), dtype=np.int8)
     
-    # LONG (+1) se ou_zscore <= -2.0
-    cond_long = cond_operacional & (df["ou_zscore"] >= 2.0)
+    # LONG (+1) se ou_zscore >= 2.5
+    cond_long = cond_operacional & (df["ou_zscore"] >= 2.5)
     sinal[cond_long] = 1
     
-    # SHORT (-1) se ou_zscore >= 2.0
-    cond_short = cond_operacional & (df["ou_zscore"] <= -2.0)
+    # SHORT (-1) se ou_zscore <= -2.5
+    cond_short = cond_operacional & (df["ou_zscore"] <= -2.5)
     sinal[cond_short] = -1
     
     df["sinal_ou_reverso"] = sinal
     
     # --- Estatísticas de Bloqueio ---
     # Sinais potenciais (Z esticado no horário operacional e processo OU válido)
-    potenciais_validos = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 50.0) & ((df["ou_zscore"] <= -2.0) | (df["ou_zscore"] >= 2.0))
+    potenciais_validos = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 40.0) & ((df["ou_zscore"] <= -2.5) | (df["ou_zscore"] >= 2.5))
     bloqueados_horario = potenciais_validos & (~op_window)
     
     stats_sinais = {
@@ -616,12 +616,12 @@ def processar_pipeline_ou(forcar: bool = False) -> pd.DataFrame:
         # Mas na verdade, é muito melhor re-estimar na hora ou salvar esses metadados.
         # Vamos re-rodar para povoar os contadores de invalidez com 100% de exatidão em menos de 3 segundos!
         logger.info("Re-calculando rapidamente estatísticas de invalidação para o relatório...")
-        _, stats_invalido, bloqueados_ou_invalido = calcular_ou_rolling(df.copy(), janela=100)
+        _, stats_invalido, bloqueados_ou_invalido = calcular_ou_rolling(df.copy(), janela=60)
         
         # Gerar estatísticas de sinais
         op_window = verificar_janela_operacional(df.index)
         sinal = df["sinal_ou_reverso"].values
-        potenciais_validos = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 50.0) & ((df["ou_zscore"] <= -2.0) | (df["ou_zscore"] >= 2.0))
+        potenciais_validos = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 40.0) & ((df["ou_zscore"] <= -2.5) | (df["ou_zscore"] >= 2.5))
         bloqueados_horario = potenciais_validos & (~op_window)
         
         stats_sinais = {
@@ -645,7 +645,7 @@ def processar_pipeline_ou(forcar: bool = False) -> pd.DataFrame:
     df_completo = pd.read_parquet(PARQUET_ENTRADA, engine="pyarrow")
     
     # 1. Pipeline Rolling OU
-    df_ou, stats_invalido, bloqueados_ou_invalido = calcular_ou_rolling(df_completo, janela=100)
+    df_ou, stats_invalido, bloqueados_ou_invalido = calcular_ou_rolling(df_completo, janela=60)
     
     # 2. Volatilidade Realizada e Gestão de Risco
     df_risco = calcular_gestao_risco(df_ou)
@@ -716,7 +716,7 @@ def gerar_tabela_parametros():
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.axis("off")
-    dados = [[k, str(v)] for k, v in {'Estratégia': 'OU Reverso', 'Regime Operacional': 'Reversão', 'Hurst Filtro': '< 0.45', 'Meia-Vida': 'Dinâmica', 'Limiar Z-Score OU': 2.5, 'Stop Loss (Risco)': '3.0x Vol', 'Take Profit (Alvo)': '2.0x Vol'}.items()]
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'OU Reverso', 'Regime Operacional': 'Breakout/Fuga', 'Memória OU': 60, 'Meia-Vida Máx': '≤ 40', 'Limiar Z-Score OU': 2.5, 'Stop Loss (Risco)': '2.5x Vol', 'Take Profit (Alvo)': '1.5x Vol'}.items()]
     tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
     tabela.auto_set_font_size(False)
     tabela.set_fontsize(12)

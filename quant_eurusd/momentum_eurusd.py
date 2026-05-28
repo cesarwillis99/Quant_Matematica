@@ -144,8 +144,8 @@ def calcular_indicadores_momentum(df: pd.DataFrame) -> pd.DataFrame:
     # VR = std(log_retornos, janela=50, ddof=1)
     vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
     df["vr_pips"] = (vr * df["Close"] * 10000.0).astype("float32")
-    df["sl_pips"] = (2.0 * df["vr_pips"]).astype("float32")
-    df["tp_pips"] = (5.0 * df["vr_pips"]).astype("float32")
+    df["sl_pips"] = (1.5 * df["vr_pips"]).astype("float32")
+    df["tp_pips"] = (6.5 * df["vr_pips"]).astype("float32")
 
     return df
 
@@ -161,8 +161,8 @@ def gerar_sinais_momentum(df: pd.DataFrame) -> tuple:
     op_window = verificar_janela_operacional(df.index)
 
     # 2. Pré-condições Operacionais
-    # Usamos o Hurst > 0.50 diretamente do parquet
-    c1_regime = (df["hurst"] > 0.50)
+    # Usamos o Hurst > 0.52 diretamente do parquet
+    c1_regime = (df["hurst"] > 0.52)
     c2_entropia_operavel = (df["entropia_shannon"] < 0.60)
     c3_ruido_block = (df["entropia_shannon"] <= 0.80)
     
@@ -172,19 +172,19 @@ def gerar_sinais_momentum(df: pd.DataFrame) -> tuple:
     sinal = np.zeros(len(df), dtype=np.int8)
 
     # LONG (+1)
-    cond_long = condicao_entrada & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)
+    cond_long = condicao_entrada & (df["percentil_acel"] > 0.85) & (df["velocidade"] > 0.0)
     sinal[cond_long] = 1
 
     # SHORT (-1)
-    cond_short = condicao_entrada & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0)
+    cond_short = condicao_entrada & (df["percentil_acel"] < 0.15) & (df["velocidade"] < 0.0)
     sinal[cond_short] = -1
 
     df["sinal_momentum"] = sinal
 
     # --- Estatísticas de Bloqueio ---
     # Sinais potenciais com cinemática alinhada e sob regime de tendência
-    potencial_long = c1_regime & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)
-    potencial_short = c1_regime & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0)
+    potencial_long = c1_regime & (df["percentil_acel"] > 0.85) & (df["velocidade"] > 0.0)
+    potencial_short = c1_regime & (df["percentil_acel"] < 0.15) & (df["velocidade"] < 0.0)
     potencial = potencial_long | potencial_short
 
     # Bloqueados apenas pelo fuso/janela de horário
@@ -411,8 +411,8 @@ def processar_pipeline_momentum(forcar: bool = False) -> pd.DataFrame:
         op_window = verificar_janela_operacional(df.index)
         c1_regime = (df["regime"] == "TENDENCIA")
         c3_ruido_block = (df["entropia_shannon"] <= 0.80)
-        potencial = (c1_regime & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)) | \
-                    (c1_regime & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0))
+        potencial = (c1_regime & (df["percentil_acel"] > 0.85) & (df["velocidade"] > 0.0)) | \
+                    (c1_regime & (df["percentil_acel"] < 0.15) & (df["velocidade"] < 0.0))
         
         stats_sinais = {
             "compra": int(np.sum(sinal == 1)),
@@ -481,7 +481,7 @@ def gerar_tabela_parametros():
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.axis("off")
-    dados = [[k, str(v)] for k, v in {'Estratégia': 'Momentum & Entropia', 'Regime Operacional': 'Tendência', 'Hurst Filtro': '> 0.50', 'Entropia Janela': 30, 'Entropia Operável': '< 0.60', 'Bloqueio Caos': '> 0.80', 'Aceleração Alvo': '> 0.80 ou < 0.20', 'Stop Loss (Risco)': '2.0x Vol', 'Take Profit (Alvo)': '5.0x Vol'}.items()]
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'Momentum & Entropia', 'Regime Operacional': 'Tendência', 'Hurst Filtro': '> 0.52', 'Entropia Janela': 30, 'Entropia Operável': '< 0.60', 'Bloqueio Caos': '> 0.80', 'Aceleração Alvo': '> 0.85 ou < 0.15', 'Stop Loss (Risco)': '1.5x Vol', 'Take Profit (Alvo)': '6.5x Vol'}.items()]
     tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
     tabela.auto_set_font_size(False)
     tabela.set_fontsize(12)

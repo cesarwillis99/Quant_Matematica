@@ -83,11 +83,11 @@ def calcular_indicadores_zscore(df: pd.DataFrame) -> pd.DataFrame:
     """
     Calcula o Z-Score do Preço de Fechamento e o SL/TP dinâmicos com base na Volatilidade Realizada.
     """
-    logger.info("Calculando Z-Score do Preço de Fechamento (rolling 50)...")
+    logger.info("Calculando Z-Score do Preço de Fechamento (rolling 80)...")
     
-    # Z_t = (Close_t - mu_50) / std_50 (amostral, ddof=1)
-    close_mean = df["Close"].rolling(window=50).mean()
-    close_std  = df["Close"].rolling(window=50).std(ddof=1)
+    # Z_t = (Close_t - mu_80) / std_80 (amostral, ddof=1)
+    close_mean = df["Close"].rolling(window=80).mean()
+    close_std  = df["Close"].rolling(window=80).std(ddof=1)
     
     # Se std == 0, resulta em NaN automaticamente no pandas
     df["zscore"] = ((df["Close"] - close_mean) / close_std).astype("float32")
@@ -96,7 +96,7 @@ def calcular_indicadores_zscore(df: pd.DataFrame) -> pd.DataFrame:
     # VR = std(log_retornos, janela=50, ddof=1)
     vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
     df["vr_pips"] = (vr * df["Close"] * 10000.0).astype("float32")
-    df["sl_pips"] = (2.0 * df["vr_pips"]).astype("float32")
+    df["sl_pips"] = (2.5 * df["vr_pips"]).astype("float32")
     df["tp_pips"] = (3.0 * df["vr_pips"]).astype("float32")
 
     return df
@@ -105,8 +105,8 @@ def calcular_indicadores_zscore(df: pd.DataFrame) -> pd.DataFrame:
 def gerar_sinais_zscore(df: pd.DataFrame) -> tuple:
     """
     Gera sinais operacionais de Z-Score otimizados baseados no gatilho de RETORNO (cruzamento de volta).
-    LONG (+1) se zscore cruzar acima de -2.5 (vindo de <= -2.5).
-    SHORT (-1) se zscore cruzar abaixo de +2.5 (vindo de >= +2.5).
+    LONG (+1) se zscore cruzar acima de -2.0 (vindo de <= -2.0).
+    SHORT (-1) se zscore cruzar abaixo de +2.0 (vindo de >= +2.0).
     Filtro de Hurst estrito: hurst < 0.40.
     """
     logger.info("Executando motor de geração de sinais Z-Score otimizado (Opção A)...")
@@ -128,10 +128,10 @@ def gerar_sinais_zscore(df: pd.DataFrame) -> tuple:
     # Gatilho de retorno: vindo de fora do limite para dentro do limite
     z_entry = 2.0
     
-    # LONG: no candle anterior estava <= -2.5, e no atual está > -2.5
+    # LONG: no candle anterior estava <= -2.0, e no atual está > -2.0
     cond_long = condicao_entrada & (z_prev <= -z_entry) & (z > -z_entry)
     
-    # SHORT: no candle anterior estava >= 2.5, e no atual está < 2.5
+    # SHORT: no candle anterior estava >= 2.0, e no atual está < 2.0
     cond_short = condicao_entrada & (z_prev >= z_entry) & (z < z_entry)
     
     # Garantir que não haja NaNs nos shifts
@@ -143,7 +143,6 @@ def gerar_sinais_zscore(df: pd.DataFrame) -> tuple:
 
     df["sinal_zscore"] = sinal
 
-    # --- Estatísticas de Bloqueio ---
     # Sinais potenciais (cruzamento de retorno sob Hurst < 0.40)
     potencial_long = c1_regime & (z_prev <= -z_entry) & (z > -z_entry)
     potencial_short = c1_regime & (z_prev >= z_entry) & (z < z_entry)
@@ -290,18 +289,18 @@ def gerar_grafico_zscore_sinais(df: pd.DataFrame):
     # -------------------------------------------------------------------------
     # PAINEL 2 — Z-Score do Preço
     # -------------------------------------------------------------------------
-    ax2.plot(times, df_plot["zscore"], color='#AB47BC', linewidth=1.0, label='Z-Score (50 bars)')
+    ax2.plot(times, df_plot["zscore"], color='#AB47BC', linewidth=1.0, label='Z-Score (80 bars)')
     
     # Linhas de entrada e stop
-    ax2.axhline(-3.0, color=cor_compra, linestyle='--', alpha=0.7, linewidth=1.0, label='Entrada Compra (-3.0)')
-    ax2.axhline(3.0, color=cor_venda, linestyle='--', alpha=0.7, linewidth=1.0, label='Entrada Venda (+3.0)')
+    ax2.axhline(-2.0, color=cor_compra, linestyle='--', alpha=0.7, linewidth=1.0, label='Entrada Compra (-2.0)')
+    ax2.axhline(2.0, color=cor_venda, linestyle='--', alpha=0.7, linewidth=1.0, label='Entrada Venda (2.0)')
     ax2.axhline(-3.5, color=cor_compra, linestyle=':', alpha=0.5, linewidth=0.9, label='Stop Compra (-3.5)')
     ax2.axhline(3.5, color=cor_venda, linestyle=':', alpha=0.5, linewidth=0.9, label='Stop Venda (+3.5)')
     ax2.axhline(0.0, color='#ECEFF1', linestyle='--', alpha=0.3, linewidth=0.8)
 
     # Sombreado das zonas extremas
-    ax2.fill_between(times, df_plot["zscore"], -3.0, where=(df_plot["zscore"] <= -3.0), color=cor_compra, alpha=0.2, interpolate=True)
-    ax2.fill_between(times, df_plot["zscore"], 3.0, where=(df_plot["zscore"] >= 3.0), color=cor_venda, alpha=0.2, interpolate=True)
+    ax2.fill_between(times, df_plot["zscore"], -2.5, where=(df_plot["zscore"] <= -2.5), color=cor_compra, alpha=0.2, interpolate=True)
+    ax2.fill_between(times, df_plot["zscore"], 2.5, where=(df_plot["zscore"] >= 2.5), color=cor_venda, alpha=0.2, interpolate=True)
 
     ax2.set_ylabel("Z-Score", fontsize=11, color='#CFD8DC')
     ax2.set_ylim(-4.2, 4.2)
@@ -344,7 +343,7 @@ def gerar_tabela_parametros():
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.axis("off")
-    dados = [[k, str(v)] for k, v in {'Estratégia': 'Z-Score Mean Reversion', 'Regime Operacional': 'Reversão', 'Hurst Filtro': '< 0.40', 'Janela Z-Score': 50, 'Janela Volatilidade': 50, 'Stop Loss (Risco)': '2.0x Vol', 'Take Profit (Alvo)': '3.0x Vol', 'Gatilho Retorno': '2.0 e -2.0', 'Horário': '10h as 22h30'}.items()]
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'Z-Score Mean Reversion', 'Regime Operacional': 'Reversão', 'Hurst Filtro': '< 0.40', 'Janela Z-Score': 80, 'Janela Volatilidade': 50, 'Stop Loss (Risco)': '2.5x Vol', 'Take Profit (Alvo)': '3.0x Vol', 'Gatilho Retorno': '2.0 e -2.0', 'Horário': '10h as 22h30'}.items()]
     tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
     tabela.auto_set_font_size(False)
     tabela.set_fontsize(12)
@@ -363,7 +362,7 @@ def gerar_tabela_parametros():
                 
     fig.suptitle("Configuração de Hiperparâmetros — ZSCORE", color="#FFFFFF", fontsize=16, fontweight="bold", y=0.95)
     plt.tight_layout()
-    caminho = DIR_GRAFICOS / "parametros_zscore.png"
+    caminho = DIR_GRAFICOS / "parametros_zscore_eurusd.png"
     plt.savefig(caminho, dpi=150, facecolor="#121212")
     plt.close()
     logger.info(f"Tabela de parâmetros salva em: {caminho}")
@@ -387,13 +386,13 @@ def processar_pipeline_zscore(forcar: bool = False) -> pd.DataFrame:
         sinal = df["sinal_zscore"].to_numpy()
         op_window = verificar_janela_operacional(df.index)
         c1_regime = (df["regime"] == "REVERSAO")
-        potencial = c1_regime & ((df["zscore"] <= -3.0) | (df["zscore"] >= 3.0))
+        potencial = c1_regime & ((df["zscore"] <= -2.5) | (df["zscore"] >= 2.5))
 
         stats_sinais = {
             "compra": int(np.sum(sinal == 1)),
             "venda": int(np.sum(sinal == -1)),
             "bloqueado_horario": int(np.sum(potencial & (~op_window))),
-            "bloqueado_regime": int(np.sum(op_window & ((df["zscore"] <= -3.0) | (df["zscore"] >= 3.0)) & (df["regime"] != "REVERSAO"))),
+            "bloqueado_regime": int(np.sum(op_window & ((df["zscore"] <= -2.5) | (df["zscore"] >= 2.5)) & (df["regime"] != "REVERSAO"))),
         }
 
         imprimir_relatorio_zscore(df, stats_sinais)
@@ -463,8 +462,8 @@ if __name__ == "__main__":
     print("\n" + "█" * 70)
     print("█" + " " * 68 + "█")
     print("█   ESTRATÉGIA MEAN REVERSION POR Z-SCORE EURUSD v2             █")
-    print("█   Filtros: Hurst Reversão + Z-Score Extremo (>= 3.0 ou <= -3.0) █")
-    print("█   Sinais: Desvio Padrão do Preço (Janela 50)                     █")
+    print("█   Filtros: Hurst Reversão + Z-Score Extremo (>= 2.0 ou <= -2.0) █")
+    print("█   Sinais: Desvio Padrão do Preço (Janela 80)                     █")
     print("█" + " " * 68 + "█")
     print("█" * 70)
 

@@ -40,17 +40,19 @@ logger = logging.getLogger(__name__)
 # CONSTANTES E CAMINHOS
 # =============================================================================
 DIR_ATUAL = Path(__file__).resolve().parent
-PARQUET_COMPLETO = DIR_ATUAL / "data" / "eurusd_h1_completo.parquet"
-PARQUET_OPERACIONAL = DIR_ATUAL / "data" / "eurusd_h1_operacional.parquet"
-PARQUET_SAIDA = DIR_ATUAL / "data" / "eurusd_h1_pca.parquet"
+DIR_DATA = DIR_ATUAL / "data"
+DIR_GRAFICOS = DIR_ATUAL / "graficos"
+PARQUET_COMPLETO = DIR_DATA / "eurusd_h1_completo.parquet"
+PARQUET_OPERACIONAL = DIR_DATA / "eurusd_h1_operacional.parquet"
+PARQUET_SAIDA = DIR_DATA / "eurusd_h1_pca.parquet"
 
-GRAFICO_SAIDA = DIR_ATUAL / "graficos" / "pca_sinais.png"
+GRAFICO_SAIDA = DIR_GRAFICOS / "pca_sinais.png"
 
 # Parâmetros da Estratégia PCA
-JANELA_PCA = 60
+JANELA_PCA = 40
 JANELA_VOL = 50
-DOMINANCIA_MINIMA = 0.45
-ZSCORE_THRESHOLD = 2.0
+DOMINANCIA_MINIMA = 0.55
+ZSCORE_THRESHOLD = 2.2
 ZSCORE_NEUTRO_MIN = -0.5
 ZSCORE_NEUTRO_MAX = 0.5
 
@@ -157,7 +159,7 @@ def gerar_tabela_parametros():
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.axis("off")
-    dados = [[k, str(v)] for k, v in {'Estratégia': 'PCA Arbitrage', 'Componentes Principais': 3, 'Janela PCA': 100, 'Desvio Ativação': 2.5, 'Stop Loss (Risco)': '2.0x Vol', 'Take Profit (Alvo)': '4.0x Vol'}.items()]
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'PCA Arbitrage', 'Janela PCA': 40, 'Dominância PC1': '> 55%', 'Desvio Ativação': 2.2, 'Stop Loss (Risco)': '2.0x Vol', 'Take Profit (Alvo)': '4.0x Vol'}.items()]
     tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
     tabela.auto_set_font_size(False)
     tabela.set_fontsize(12)
@@ -219,7 +221,7 @@ def executar_pipeline_pca():
     df["vr_pips"] = df["VR"] * df["Close"] * 10000.0
     
     df["sl_pips"] = 2.0 * df["vr_pips"]
-    df["tp_pips"] = 3.0 * df["vr_pips"]
+    df["tp_pips"] = 4.0 * df["vr_pips"]
     
     df["sl_pips"] = df["sl_pips"].clip(lower=3.0, upper=60.0).fillna(10.0)
     df["tp_pips"] = df["tp_pips"].clip(lower=4.5, upper=90.0).fillna(15.0)
@@ -255,65 +257,12 @@ def executar_pipeline_pca():
     logger.info(f"Parquet salvo com sucesso em: {PARQUET_SAIDA}")
     
     # ── PARTE 6: Plotagem ──
-    logger.info("Gerando gráfico profissional de demonstração...")
-    plt.rcParams.update({
-        "figure.facecolor":  "#0D1117",
-        "axes.facecolor":    "#0D1117",
-        "axes.edgecolor":    "#21262D",
-        "axes.labelcolor":   "#E6EDF3",
-        "xtick.color":       "#E6EDF3",
-        "ytick.color":       "#E6EDF3",
-        "text.color":        "#E6EDF3",
-        "grid.color":        "#21262D",
-    })
-    
-    df_plot = df.iloc[-3000:].copy()
-    
-    fig, (ax1, ax2, ax3) = plt.subplots(
-        3, 1, figsize=(18, 14), sharex=True,
-        gridspec_kw={"height_ratios": [3, 1.5, 1.5], "hspace": 0.05}
-    )
-    
-    fig.suptitle("Análise de Componentes Principais (PCA) — Detecção de Extremos Estruturais", 
-                 color="#E6EDF3", fontsize=14, fontweight="bold", y=0.92)
-                 
-    # Ax1: Preço e Sinais
-    ax1.plot(df_plot.index, df_plot["Close"], color="#58A6FF", linewidth=1.2, alpha=0.9)
-    buys = df_plot[df_plot["sinal_pca"] == 1]
-    sells = df_plot[df_plot["sinal_pca"] == -1]
-    ax1.scatter(buys.index, buys["Close"] - 0.0010, marker="^", color="#3FB950", s=100, label="COMPRA (+1)", zorder=5)
-    ax1.scatter(sells.index, sells["Close"] + 0.0010, marker="v", color="#F85149", s=100, label="VENDA (-1)", zorder=5)
-    ax1.set_ylabel("Cotação", fontsize=10)
-    ax1.legend(loc="upper left", framealpha=0.3)
-    ax1.grid(True, linestyle="--", alpha=0.2)
-    
-    # Ax2: Z-Score da PC1
-    ax2.plot(df_plot.index, df_plot["pca_z_pc1"], color="#A371F7", linewidth=1.0)
-    ax2.axhline(0, color="#E6EDF3", linestyle="-", alpha=0.3)
-    ax2.axhline(ZSCORE_THRESHOLD, color="#F85149", linestyle="--", alpha=0.7, label="Threshold Venda (+2.0)")
-    ax2.axhline(-ZSCORE_THRESHOLD, color="#3FB950", linestyle="--", alpha=0.7, label="Threshold Compra (-2.0)")
-    ax2.fill_between(df_plot.index, ZSCORE_NEUTRO_MIN, ZSCORE_NEUTRO_MAX, color="#484F58", alpha=0.3, label="Zona Neutra")
-    ax2.set_ylabel("Z-Score (PC1)", fontsize=10)
-    ax2.legend(loc="upper left", framealpha=0.3)
-    ax2.grid(True, linestyle="--", alpha=0.2)
-    
-    # Ax3: Dominância Espectral
-    ax3.plot(df_plot.index, df_plot["pca_dominancia"], color="#F0A500", linewidth=1.0)
-    ax3.axhline(DOMINANCIA_MINIMA, color="#E6EDF3", linestyle=":", alpha=0.8, label=f"Threshold ({DOMINANCIA_MINIMA})")
-    ax3.fill_between(df_plot.index, 0, DOMINANCIA_MINIMA, color="#F85149", alpha=0.1)
-    ax3.fill_between(df_plot.index, DOMINANCIA_MINIMA, 1.0, color="#3FB950", alpha=0.1)
-    ax3.set_ylim(0, 1)
-    ax3.set_ylabel("Dominância (PC1)", fontsize=10)
-    ax3.legend(loc="upper left", framealpha=0.3)
-    ax3.grid(True, linestyle="--", alpha=0.2)
-    
-    GRAFICO_SAIDA.parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(GRAFICO_SAIDA, dpi=120, bbox_inches="tight", facecolor="#0D1117")
-    plt.close()
-    logger.info(f"Gráfico exportado para: {GRAFICO_SAIDA}")
+    # Desativado a pedido do usuário
+    pass
 
 if __name__ == "__main__":
     try:
+        gerar_tabela_parametros()
         executar_pipeline_pca()
         print("\n> Módulo PCA concluído com sucesso!")
     except Exception as e:

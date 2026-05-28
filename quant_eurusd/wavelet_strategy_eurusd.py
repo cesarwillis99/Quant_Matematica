@@ -53,13 +53,13 @@ PARQUET_SAIDA = DIR_DATA / "eurusd_h1_wavelet.parquet"
 # Parâmetros
 ESCALAS = np.array([4, 12, 24, 120])
 WAVELET = 'cmor1.5-1.0'
-SMOOTH_WINDOW = 4  # Janela curta para evitar cancelamento de fase na escala 4h
+SMOOTH_WINDOW = 3  # Janela curta para evitar cancelamento de fase na escala 4h
 POT_NORM_WINDOW = 100
 ENERGIA_WINDOW = 100
 
 JANELA_VR = 50
 MULT_SL = 2.0
-MULT_TP = 3.5
+MULT_TP = 4.5
 
 # Cores Dark Mode
 COR_FUNDO = "#0D1117"
@@ -147,7 +147,7 @@ def calcular_wavelet() -> pd.DataFrame:
     logger.info("Aplicando as regras de estado direcional...")
     sinais = np.zeros(len(df), dtype=np.int8)
     
-    coer_ok = df["wav_coerencia_12"].values >= 0.50
+    coer_ok = df["wav_coerencia_12"].values >= 0.60
     energ_ok = df["wav_energia_total"].values > df["wav_energia_p40"].values
     
     df_d_fase = df["wav_d_fase"].values
@@ -157,7 +157,7 @@ def calcular_wavelet() -> pd.DataFrame:
     inflex_up = (df_d_fase > 0) & (d_fase_prev <= 0)
     inflex_dn = (df_d_fase < 0) & (d_fase_prev >= 0)
     
-    pot_s1_ok = df["wav_pot_norm_s1"].values < 0.8
+    pot_s1_ok = df["wav_pot_norm_s1"].values < 0.6
     ret_neg = log_ret < 0
     ret_pos = log_ret > 0
     
@@ -198,7 +198,7 @@ def gerar_relatorio_cli(df: pd.DataFrame):
     print(f"    - Escala Dominante 4 (120h): {dom.get(3, 0):.2f}% do tempo")
     print(f"    - Energia Total (Med/Min/Max): {ene.mean():.6f} | {ene.min():.6f} | {ene.max():.6f}")
     print(f"    - Coerência s1-s2 (Média)    : {coer.mean():.4f}")
-    print(f"    - % Tempo Coerência >= 0.50  : {(np.sum(coer >= 0.50) / len(coer) * 100):.2f}%")
+    print(f"    - % Tempo Coerência >= 0.60  : {(np.sum(coer >= 0.60) / len(coer) * 100):.2f}%")
     
     print("\n  SEÇÃO 2 — Pontos de Inflexão (Fase):")
     print("  ──────────────────────────────────────────────────────────────────")
@@ -215,7 +215,7 @@ def gerar_relatorio_cli(df: pd.DataFrame):
     # Bloqueios teóricos
     mask_op = df.index.isin(pd.read_parquet(PARQUET_OPERACIONAL).index)
     bloq_horario = np.sum(~mask_op)
-    bloq_coer = np.sum(df["wav_coerencia_12"] < 0.50)
+    bloq_coer = np.sum(df["wav_coerencia_12"] < 0.60)
     bloq_ene = np.sum(df["wav_energia_total"] <= df["wav_energia_p40"])
     print(f"    - Bloqueados por Horário    : {bloq_horario:,} candles")
     print(f"    - Bloqueados por Coerência  : {bloq_coer:,} candles")
@@ -275,7 +275,7 @@ def plot_wavelet(df: pd.DataFrame, num_candles=500):
     # ── PAINEL 3: CROSS-COHERENCE S1-S2 ──
     ax3 = fig.add_subplot(gs[2], sharex=ax1)
     ax3.plot(df_plot.index, df_plot["wav_coerencia_12"], color="#00E676", linewidth=1.2, label="Coerência s1-s2")
-    ax3.axhline(0.50, color="#F85149", linestyle="--", alpha=0.7)
+    ax3.axhline(0.60, color='#81C784', linestyle='--', linewidth=1.0)
     ax3.fill_between(df_plot.index, df_plot["wav_coerencia_12"], 0.50, where=(df_plot["wav_coerencia_12"] >= 0.50), color="#00E676", alpha=0.2)
     ax3.set_ylim(0, 1.05)
     ax3.set_title("Cross-Scale Coherence (Sincronia de Ciclos)", color=COR_TEXTO, loc="left", fontsize=10)
@@ -322,7 +322,7 @@ def main():
         logger.info(f"Parquet gerado com sucesso: {PARQUET_SAIDA.name}")
         
     gerar_relatorio_cli(df)
-    plot_wavelet(df)
+    # plot_wavelet(df)  # Desativado a pedido do usuário
     
     print("\n> Módulo Wavelet concluído com sucesso!")
 
@@ -338,7 +338,7 @@ def gerar_tabela_parametros():
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.axis("off")
-    dados = [[k, str(v)] for k, v in {'Estratégia': 'Wavelet Transform', 'Tipo Wavelet': 'db4', 'Nível Decomposição': 4, 'Sinal Filtro': 'Detalhe nível 4', 'Stop Loss (Risco)': '1.5x Vol', 'Take Profit (Alvo)': '3.0x Vol'}.items()]
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'CWT Phase-Sync', 'Scales CWT': '4, 12, 24, 120', 'Smooth Window': 3, 'Energia Quantile': 'P40 (dinâmico)', 'Coerência Cutoff': '>= 0.60', 'Energia S1 Max': '< 0.60', 'Stop Loss (Risco)': '2.0x Vol', 'Take Profit (Alvo)': '4.5x Vol', 'Horário Operacional': '10h as 22h30'}.items()]
     tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
     tabela.auto_set_font_size(False)
     tabela.set_fontsize(12)
