@@ -635,7 +635,11 @@ def gerar_grafico_equity_curves(
     mapa_visual = {
         "ZSCORE":    (COR_ZSCORE,    COR_DD_Z),
         "MOMENTUM":  (COR_MOMENTUM,  COR_DD_M),
-        "COMBINADA": (COR_COMBINADA, COR_DD_C)
+        "OU":        (COR_OU,        COR_DD_O),
+        "OU_REVERSO":(COR_OU,        COR_DD_O),
+        "HAWKES":    ("#00E676",     "#006030"),
+        "WAVELET":   ("#FF9800",     "#804c00"),
+        "PCA":       ("#FF4081",     "#802040")
     }
     
     for nome, eq in equity_curves.items():

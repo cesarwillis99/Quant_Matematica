@@ -253,8 +253,8 @@ def simular_estrategia(
     
     operacoes: List[Operacao] = []
     capital = CAPITAL_INICIAL
-    posicao: Optional[Operacao] = None
-    candle_entrada = 0
+    posicoes_ativas: Dict[str, Operacao] = {}
+    candles_entrada: Dict[str, int] = {}
     id_op = 0
     
     indices = df.index
@@ -262,7 +262,7 @@ def simular_estrategia(
     highs = df["High"].values.astype(np.float64)
     lows = df["Low"].values.astype(np.float64)
     closes = df["Close"].values.astype(np.float64)
-    sinais = df[coluna_sinal].values.astype(np.int8)
+    sinais = df[coluna_sinal].values.astype(np.int8) if coluna_sinal in df.columns else np.zeros(len(df), dtype=np.int8)
     
     # Parâmetros de Stop de cada estratégia
     sl_z = df["sl_pips_zscore"].values.astype(np.float64)
@@ -288,6 +288,20 @@ def simular_estrategia(
     
     n_rows = len(df)
     
+    if is_combinada:
+        sinais_dict = {
+            "MOMENTUM": df["sinal_momentum"].values.astype(np.int8) if "sinal_momentum" in df.columns else np.zeros(n_rows, dtype=np.int8),
+            "PCA": df["sinal_pca"].values.astype(np.int8) if "sinal_pca" in df.columns else np.zeros(n_rows, dtype=np.int8),
+            "HAWKES": df["sinal_hawkes"].values.astype(np.int8) if "sinal_hawkes" in df.columns else np.zeros(n_rows, dtype=np.int8),
+            "OU_REVERSO": df["sinal_ou_reverso"].values.astype(np.int8) if "sinal_ou_reverso" in df.columns else np.zeros(n_rows, dtype=np.int8),
+            "ZSCORE": df["sinal_zscore"].values.astype(np.int8) if "sinal_zscore" in df.columns else np.zeros(n_rows, dtype=np.int8),
+            "WAVELET": df["sinal_wavelet"].values.astype(np.int8) if "sinal_wavelet" in df.columns else np.zeros(n_rows, dtype=np.int8)
+        }
+        ordem_prioridade = ["MOMENTUM", "PCA", "HAWKES", "OU_REVERSO", "ZSCORE", "WAVELET"]
+    else:
+        sinais_dict = {nome: sinais}
+        ordem_prioridade = [nome]
+    
     for i in range(n_rows):
         dt_atual = indices[i]
         dia_semana = dt_atual.weekday()  # 0=Seg... 4=Sex
@@ -301,20 +315,25 @@ def simular_estrategia(
             ((dia_semana == 6) and (hora < 21))        # Domingo pré-21h
         )
         
-        # 1. Gerenciar Posição Aberta
-        if posicao is not None:
+        # 1. Gerenciar Posições Abertas
+        estrategias_ativas = list(posicoes_ativas.keys())
+        for est in estrategias_ativas:
+            pos = posicoes_ativas[est]
+            c_ent = candles_entrada[est]
+            
             # Fechamento forçado sexta 21h
             if eh_sexta_21h:
-                pnl_p, pnl_m = calcular_pnl(posicao.direcao, posicao.entrada_preco, closes[i], posicao.lot_size)
-                posicao.saida_dt = dt_atual
-                posicao.saida_preco = closes[i]
-                posicao.motivo_saida = "FIM_SEMANA"
-                posicao.pnl_pips = pnl_p
-                posicao.pnl_monetario = pnl_m
-                posicao.duracao_candles = i - candle_entrada
+                pnl_p, pnl_m = calcular_pnl(pos.direcao, pos.entrada_preco, closes[i], pos.lot_size)
+                pos.saida_dt = dt_atual
+                pos.saida_preco = closes[i]
+                pos.motivo_saida = "FIM_SEMANA"
+                pos.pnl_pips = pnl_p
+                pos.pnl_monetario = pnl_m
+                pos.duracao_candles = i - c_ent
                 capital += pnl_m
-                operacoes.append(posicao)
-                posicao = None
+                operacoes.append(pos)
+                del posicoes_ativas[est]
+                del candles_entrada[est]
             else:
                 # Determinar quais saídas neutras monitorar dependendo da posição
                 z_val = zscores[i] if zscores is not None else None
@@ -323,142 +342,104 @@ def simular_estrategia(
                 w_val = wav_d_fase_arr[i] if wav_d_fase_arr is not None else None
                 w_prev = wav_d_fase_arr[i-1] if (wav_d_fase_arr is not None and i > 0) else None
                 
-                u_z_exit = usar_zscore_exit
-                u_o_exit = usar_hawkes_exit
-                u_ou_exit = usar_ou_exit
-                u_w_exit = usar_wavelet_exit
-                
-                if is_combinada and posicao.motivo_saida == "":
-                    # Na combinada, extraímos o comportamento da origem do trade
-                    orig = posicao.estrategia
-                    u_z_exit = (orig == "ZSCORE")
-                    u_o_exit = (orig == "HAWKES")
-                    u_ou_exit = (orig == "OU_REVERSO")
-                    u_w_exit = (orig == "WAVELET")
+                u_z_exit = (est == "ZSCORE") or (not is_combinada and usar_zscore_exit)
+                u_o_exit = (est == "HAWKES") or (not is_combinada and usar_hawkes_exit)
+                u_ou_exit = (est == "OU_REVERSO") or (not is_combinada and usar_ou_exit)
+                u_w_exit = (est == "WAVELET") or (not is_combinada and usar_wavelet_exit)
                 
                 deve_fechar, preco_saida, motivo = verificar_saida_candle(
-                    posicao.direcao, highs[i], lows[i], closes[i],
-                    posicao.sl_preco, posicao.tp_preco,
+                    pos.direcao, highs[i], lows[i], closes[i],
+                    pos.sl_preco, pos.tp_preco,
                     z_val, o_val, ou_val, u_z_exit, u_o_exit, u_ou_exit,
                     w_val, w_prev, u_w_exit
                 )
                 
                 if deve_fechar:
-                    pnl_p, pnl_m = calcular_pnl(posicao.direcao, posicao.entrada_preco, preco_saida, posicao.lot_size)
-                    posicao.saida_dt = dt_atual
-                    posicao.saida_preco = preco_saida
-                    posicao.motivo_saida = motivo
-                    posicao.pnl_pips = pnl_p
-                    posicao.pnl_monetario = pnl_m
-                    posicao.duracao_candles = i - candle_entrada
-                    # Restaurar nome correto da estratégia na combinada
-                    if is_combinada:
-                        posicao.estrategia = "COMBINADA"
+                    pnl_p, pnl_m = calcular_pnl(pos.direcao, pos.entrada_preco, preco_saida, pos.lot_size)
+                    pos.saida_dt = dt_atual
+                    pos.saida_preco = preco_saida
+                    pos.motivo_saida = motivo
+                    pos.pnl_pips = pnl_p
+                    pos.pnl_monetario = pnl_m
+                    pos.duracao_candles = i - c_ent
                     capital += pnl_m
-                    operacoes.append(posicao)
-                    posicao = None
+                    operacoes.append(pos)
+                    del posicoes_ativas[est]
+                    del candles_entrada[est]
                     
-        # 2. Abrir Nova Posição
-        if posicao is None and sinais[i] != 0 and not bloqueio_entrada:
-            if i + 1 >= n_rows:
-                continue
-                
-            # Identificar parâmetros de stop
-            sl_pips, tp_pips = 0.0, 0.0
-            orig_nome = nome
+        # 2. Abrir Novas Posições (1 por robô)
+        if not bloqueio_entrada and i + 1 < n_rows:
+            for est in ordem_prioridade:
+                if est not in posicoes_ativas:
+                    sinal_val = sinais_dict[est][i]
+                    if sinal_val != 0:
+                        # Identificar parâmetros de stop
+                        if est == "ZSCORE":
+                            sl_pips, tp_pips = sl_z[i], tp_z[i]
+                        elif est == "MOMENTUM":
+                            sl_pips, tp_pips = sl_m[i], tp_m[i]
+                        elif est == "OU_REVERSO":
+                            sl_pips = sl_ou[i] if sl_ou is not None else 0
+                            tp_pips = tp_ou[i] if tp_ou is not None else 0
+                        elif est == "HAWKES":
+                            sl_pips, tp_pips = sl_o[i], tp_o[i]
+                        elif est == "WAVELET":
+                            sl_pips = sl_w[i] if sl_w is not None else 0
+                            tp_pips = tp_w[i] if tp_w is not None else 0
+                        elif est == "PCA":
+                            sl_pips = sl_pca[i] if sl_pca is not None else 0
+                            tp_pips = tp_pca[i] if tp_pca is not None else 0
+                        else:
+                            continue
+                            
+                        if not (math.isfinite(sl_pips) and sl_pips > 0 and math.isfinite(tp_pips) and tp_pips > 0):
+                            continue
+                            
+                        lot = calcular_tamanho_lote(capital, sl_pips)
+                        delta_sl = sl_pips / FATOR_PIPS
+                        delta_tp = tp_pips / FATOR_PIPS
+                        
+                        preco_entrada = opens[i + 1]
+                        direc = int(sinal_val)
+                        
+                        if direc == 1:  # LONG
+                            sl_abs = preco_entrada - delta_sl
+                            tp_abs = preco_entrada + delta_tp
+                        else:  # SHORT
+                            sl_abs = preco_entrada + delta_sl
+                            tp_abs = preco_entrada - delta_tp
+                            
+                        id_op += 1
+                        nova_pos = Operacao(
+                            id=id_op,
+                            estrategia=f"COMBINADA ({est})" if is_combinada else nome,
+                            direcao=direc,
+                            entrada_dt=dt_atual,
+                            entrada_preco=preco_entrada,
+                            sl_preco=sl_abs,
+                            tp_preco=tp_abs,
+                            sl_pips=sl_pips,
+                            tp_pips=tp_pips,
+                            lot_size=lot,
+                            capital_entrada=capital
+                        )
+                        posicoes_ativas[est] = nova_pos
+                        candles_entrada[est] = i
             
-            if is_combinada and origens is not None:
-                orig_s = origens[i]
-                if orig_s == 1:  # HAWKES
-                    sl_pips = sl_o[i]
-                    tp_pips = tp_o[i]
-                    orig_nome = "HAWKES"
-                elif orig_s == 2:  # ZSCORE
-                    sl_pips = sl_z[i]
-                    tp_pips = tp_z[i]
-                    orig_nome = "ZSCORE"
-                elif orig_s == 3:  # MOMENTUM
-                    sl_pips = sl_m[i]
-                    tp_pips = tp_m[i]
-                    orig_nome = "MOMENTUM"
-                elif orig_s == 4:  # OU_REVERSO
-                    sl_pips = sl_ou[i]
-                    tp_pips = tp_ou[i]
-                    orig_nome = "OU_REVERSO"
-                elif orig_s == 5:  # WAVELET
-                    sl_pips = sl_w[i]
-                    tp_pips = tp_w[i]
-                    orig_nome = "WAVELET"
-                elif orig_s == 6:  # PCA
-                    sl_pips = sl_pca[i]
-                    tp_pips = tp_pca[i]
-                    orig_nome = "PCA"
-            else:
-                if nome == "ZSCORE":
-                    sl_pips = sl_z[i]
-                    tp_pips = tp_z[i]
-                elif nome == "MOMENTUM":
-                    sl_pips = sl_m[i]
-                    tp_pips = tp_m[i]
-                elif nome == "OU_REVERSO" and sl_ou is not None:
-                    sl_pips = sl_ou[i]
-                    tp_pips = tp_ou[i]
-                elif nome == "HAWKES":
-                    sl_pips = sl_o[i]
-                    tp_pips = tp_o[i]
-                elif nome == "WAVELET" and sl_w is not None:
-                    sl_pips = sl_w[i]
-                    tp_pips = tp_w[i]
-                elif nome == "PCA" and sl_pca is not None:
-                    sl_pips = sl_pca[i]
-                    tp_pips = tp_pca[i]
-                    
-            if not (math.isfinite(sl_pips) and sl_pips > 0 and math.isfinite(tp_pips) and tp_pips > 0):
-                continue
-                
-            lot = calcular_tamanho_lote(capital, sl_pips)
-            delta_sl = sl_pips / FATOR_PIPS
-            delta_tp = tp_pips / FATOR_PIPS
-            
-            preco_entrada = opens[i + 1]
-            direc = int(sinais[i])
-            
-            if direc == 1:  # LONG
-                sl_abs = preco_entrada - delta_sl
-                tp_abs = preco_entrada + delta_tp
-            else:  # SHORT
-                sl_abs = preco_entrada + delta_sl
-                tp_abs = preco_entrada - delta_tp
-                
-            id_op += 1
-            posicao = Operacao(
-                id=id_op,
-                estrategia=orig_nome,  # Na combinada, usamos o nome original temporariamente para saber como sair
-                direcao=direc,
-                entrada_dt=dt_atual,
-                entrada_preco=preco_entrada,
-                sl_preco=sl_abs,
-                tp_preco=tp_abs,
-                sl_pips=sl_pips,
-                tp_pips=tp_pips,
-                lot_size=lot,
-                capital_entrada=capital
-            )
-            candle_entrada = i
-            
-    # Fechar posição aberta no último candle
-    if posicao is not None:
-        pnl_p, pnl_m = calcular_pnl(posicao.direcao, posicao.entrada_preco, closes[-1], posicao.lot_size)
-        posicao.saida_dt = indices[-1]
-        posicao.saida_preco = closes[-1]
-        posicao.motivo_saida = "FIM_DADOS"
-        posicao.pnl_pips = pnl_p
-        posicao.pnl_monetario = pnl_m
-        posicao.duracao_candles = n_rows - 1 - candle_entrada
-        if is_combinada:
-            posicao.estrategia = "COMBINADA"
+    # Fechar todas posições abertas no último candle
+    estrategias_ativas = list(posicoes_ativas.keys())
+    for est in estrategias_ativas:
+        pos = posicoes_ativas[est]
+        c_ent = candles_entrada[est]
+        pnl_p, pnl_m = calcular_pnl(pos.direcao, pos.entrada_preco, closes[-1], pos.lot_size)
+        pos.saida_dt = indices[-1]
+        pos.saida_preco = closes[-1]
+        pos.motivo_saida = "FIM_DADOS"
+        pos.pnl_pips = pnl_p
+        pos.pnl_monetario = pnl_m
+        pos.duracao_candles = n_rows - 1 - c_ent
         capital += pnl_m
-        operacoes.append(posicao)
+        operacoes.append(pos)
         
     logger.info(f"Fim da simulação {nome}: {len(operacoes)} operações | Capital Final: ${capital:,.2f}")
     return operacoes
@@ -863,35 +844,14 @@ def processar_pipeline_backtest():
     sinal_comb = np.zeros(len(df), dtype=np.int8)
     origem_sinal = np.zeros(len(df), dtype=np.int8)
     
-    s_z = df["sinal_zscore"].values
-    s_m = df["sinal_momentum"].values
-    s_h = df["sinal_hawkes"].values
-    s_ou = df["sinal_ou_reverso"].values
-    s_w = df["sinal_wavelet"].values
-    s_pca = df["sinal_pca"].values
-    
-    for i in range(len(df)):
-        if s_m[i] != 0:
-            sinal_comb[i] = s_m[i]
-            origem_sinal[i] = 3 # MOMENTUM (Must map exactly to what simular_estrategia expects)
-        elif s_pca[i] != 0:
-            sinal_comb[i] = s_pca[i]
-            origem_sinal[i] = 6 # PCA
-        elif s_h[i] != 0:
-            sinal_comb[i] = s_h[i]
-            origem_sinal[i] = 1 # HAWKES
-        elif s_ou[i] != 0:
-            sinal_comb[i] = s_ou[i]
-            origem_sinal[i] = 4 # OU_REVERSO
-        elif s_z[i] != 0:
-            sinal_comb[i] = s_z[i]
-            origem_sinal[i] = 2 # ZSCORE
-        elif s_w[i] != 0:
-            sinal_comb[i] = s_w[i]
-            origem_sinal[i] = 5 # WAVELET
-            
     df["sinal_combinado"] = sinal_comb
-    df["origem_sinal"] = origem_sinal
+    # Sinais originais processados isoladamente pelo simular_estrategia
+    s_z = df["sinal_zscore"].values if "sinal_zscore" in df.columns else np.zeros(len(df))
+    s_m = df["sinal_momentum"].values if "sinal_momentum" in df.columns else np.zeros(len(df))
+    s_h = df["sinal_hawkes"].values if "sinal_hawkes" in df.columns else np.zeros(len(df))
+    s_ou = df["sinal_ou_reverso"].values if "sinal_ou_reverso" in df.columns else np.zeros(len(df))
+    s_w = df["sinal_wavelet"].values if "sinal_wavelet" in df.columns else np.zeros(len(df))
+    s_pca = df["sinal_pca"].values if "sinal_pca" in df.columns else np.zeros(len(df))
     
     n_z_tot = (s_z != 0).sum()
     n_m_tot = (s_m != 0).sum()
