@@ -781,11 +781,13 @@ def processar_pipeline_backtest(estrategia: str):
     
     executar_analise_periodos(df, todas_operacoes)
     
-    caminhos_grafico = [DIR_PROJETO_V2 / "graficos" / f"equity_curve_{estrategia.lower()}.png"]
+    caminhos_grafico = [DIR_PROJETO_V2 / "graficos" / f"equity_curve_{estrategia.lower()}_eurusd.png"]
+    
+    # Prepara caminhos para métricas (CSV)
+    caminhos_ops = [DIR_PROJETO_V2 / "resultados" / f"operacoes_{estrategia.lower()}_eurusd.csv"]
+    caminhos_met = [DIR_PROJETO_V2 / "resultados" / f"metricas_{estrategia.lower()}_eurusd.csv"]
     gerar_grafico_equity_curves(equity_curves, todas_operacoes, caminhos_grafico)
     
-    caminhos_ops = [DIR_PROJETO_V2 / "resultados" / f"operacoes_{estrategia.lower()}.csv"]
-    caminhos_met = [DIR_PROJETO_V2 / "resultados" / f"metricas_{estrategia.lower()}.csv"]
     salvar_arquivos_resultados(todas_operacoes, todas_metricas, caminhos_ops, caminhos_met)
     
     print(f"\n" + "█" * 75)
