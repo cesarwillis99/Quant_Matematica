@@ -59,7 +59,7 @@ DIR_DATA    = DIR_PROJETO / "data"
 DIR_GRAFICOS = DIR_PROJETO / "graficos"
 
 PARQUET_ENTRADA = DIR_DATA / "eurusd_h1_completo.parquet"
-PARQUET_SAIDA   = DIR_DATA / "eurusd_h1_ou.parquet"
+PARQUET_SAIDA   = DIR_DATA / "eurusd_h1_ou_reverso.parquet"
 CAMINHO_GRAFICO = DIR_GRAFICOS / "ou_sinais.png"
 
 # =============================================================================
@@ -284,8 +284,8 @@ def calcular_gestao_risco(df: pd.DataFrame) -> pd.DataFrame:
         
     vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
     df["vr_pips"] = (vr * df["Close"] * 10000.0).astype(np.float32)
-    df["sl_pips"] = (2.0 * df["vr_pips"]).astype(np.float32)
-    df["tp_pips"] = (3.0 * df["vr_pips"]).astype(np.float32)
+    df["sl_pips"] = (3.0 * df["vr_pips"]).astype(np.float32)
+    df["tp_pips"] = (2.0 * df["vr_pips"]).astype(np.float32)
     
     return df
 
@@ -308,14 +308,14 @@ def gerar_sinais_ou(df: pd.DataFrame, bloqueados_ou_invalido: int) -> tuple:
     sinal = np.zeros(len(df), dtype=np.int8)
     
     # LONG (+1) se ou_zscore <= -2.0
-    cond_long = cond_operacional & (df["ou_zscore"] <= -2.0)
+    cond_long = cond_operacional & (df["ou_zscore"] >= 2.0)
     sinal[cond_long] = 1
     
     # SHORT (-1) se ou_zscore >= 2.0
-    cond_short = cond_operacional & (df["ou_zscore"] >= 2.0)
+    cond_short = cond_operacional & (df["ou_zscore"] <= -2.0)
     sinal[cond_short] = -1
     
-    df["sinal_ou"] = sinal
+    df["sinal_ou_reverso"] = sinal
     
     # --- Estatísticas de Bloqueio ---
     # Sinais potenciais (Z esticado no horário operacional e processo OU válido)
@@ -502,8 +502,8 @@ def gerar_grafico_ou(df: pd.DataFrame):
     # -------------------------------------------------------------------------
     ax1.plot(times, df_plot["Close"], color=cor_neutra, linewidth=1.2, label='Preço Close')
     
-    compras = df_plot[df_plot["sinal_ou"] == 1]
-    vendas = df_plot[df_plot["sinal_ou"] == -1]
+    compras = df_plot[df_plot["sinal_ou_reverso"] == 1]
+    vendas = df_plot[df_plot["sinal_ou_reverso"] == -1]
     
     ax1.scatter(compras.index, compras["Close"] - 0.0010, color=cor_compra, marker='^', s=50, label='COMPRA (LONG)', zorder=5)
     ax1.scatter(vendas.index, vendas["Close"] + 0.0010, color=cor_venda, marker='v', s=50, label='VENDA (SHORT)', zorder=5)
@@ -620,7 +620,7 @@ def processar_pipeline_ou(forcar: bool = False) -> pd.DataFrame:
         
         # Gerar estatísticas de sinais
         op_window = verificar_janela_operacional(df.index)
-        sinal = df["sinal_ou"].values
+        sinal = df["sinal_ou_reverso"].values
         potenciais_validos = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 50.0) & ((df["ou_zscore"] <= -2.0) | (df["ou_zscore"] >= 2.0))
         bloqueados_horario = potenciais_validos & (~op_window)
         
@@ -716,7 +716,7 @@ def gerar_tabela_parametros():
     plt.style.use('dark_background')
     fig, ax = plt.subplots(figsize=(10, 5))
     ax.axis("off")
-    dados = [[k, str(v)] for k, v in {'Estratégia': 'Ornstein-Uhlenbeck', 'Regime Operacional': 'Reversão', 'Hurst Filtro': '< 0.45', 'Meia-Vida': 'Dinâmica', 'Limiar Z-Score OU': 2.5, 'Stop Loss (Risco)': '2.0x Vol', 'Take Profit (Alvo)': '3.0x Vol'}.items()]
+    dados = [[k, str(v)] for k, v in {'Estratégia': 'OU Reverso', 'Regime Operacional': 'Reversão', 'Hurst Filtro': '< 0.45', 'Meia-Vida': 'Dinâmica', 'Limiar Z-Score OU': 2.5, 'Stop Loss (Risco)': '3.0x Vol', 'Take Profit (Alvo)': '2.0x Vol'}.items()]
     tabela = ax.table(cellText=dados, colLabels=["Métrica", "Valor Otimizado"], loc="center", cellLoc="left")
     tabela.auto_set_font_size(False)
     tabela.set_fontsize(12)
@@ -733,7 +733,7 @@ def gerar_tabela_parametros():
                 cell.set_text_props(weight="bold", color="#82AAFF")
     fig.suptitle("Configuração de Hiperparâmetros — OU", color="#FFFFFF", fontsize=16, fontweight="bold", y=0.95)
     plt.tight_layout()
-    caminho = DIR_GRAFICOS / "parametros_ou.png"
+    caminho = DIR_GRAFICOS / "parametros_ou_reverso_eurusd.png"
     plt.savefig(caminho, dpi=150, facecolor="#121212")
     plt.close()
     logger.info(f"Tabela de parâmetros salva em: {caminho}")
@@ -755,6 +755,15 @@ if __name__ == "__main__":
     print("█   ESTRATÉGIA MEAN REVERSION ORNSTEIN-UHLENBECK EURUSD H1     █")
     print("█   Operação: Baseada em Z-Score do Processo OU Interno         █")
     print("█   Independente de Hurst e Z-Score Clássico                    █")
+    print("█" + " " * 68 + "█")
+    print("█" * 70)
+    
+    try:
+        processar_pipeline_ou(args.forcar)
+        print("✅ Módulo ou_strategy.py executado com sucesso!\n")
+    except Exception as e:
+        logger.exception("Erro crítico durante a execução do módulo ou_strategy.py:")
+        sys.exit(1)
     print("█" + " " * 68 + "█")
     print("█" * 70)
     

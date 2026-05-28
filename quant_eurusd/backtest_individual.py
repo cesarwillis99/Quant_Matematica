@@ -784,7 +784,7 @@ def processar_pipeline_backtest(estrategia: str):
         col_sinal, 
         estrategia, 
         usar_zscore_exit=(estrategia == "ZSCORE"), 
-        usar_ou_exit=(estrategia == "OU" or estrategia == "HAWKES"),
+        usar_ou_exit=(estrategia == "OU" or estrategia == "HAWKES" or estrategia == "OU_REVERSO"),
         usar_wavelet_exit=(estrategia == "WAVELET"),
         usar_curvatura_exit=(estrategia == "CURVATURA")
     )
