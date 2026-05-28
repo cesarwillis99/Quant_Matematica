@@ -23,7 +23,7 @@ Mecânica do Backtest:
 Arquivos de entrada:
     - quant_eurusd_v2/data/eurusd_h1_zscore.parquet
     - quant_eurusd_v2/data/eurusd_h1_momentum.parquet
-    - quant_eurusd_v2/data/eurusd_h1_hawkes.parquet
+    - quant_eurusd_v2/data/eurusd_h1_ou.parquet
 
 Arquivos de saída:
     - quant_eurusd/graficos/equity_curves.png e quant_eurusd_v2/graficos/equity_curves.png
@@ -77,7 +77,7 @@ DIR_PROJETO_V1 = DIR_ATUAL.parent / "quant_eurusd"
 # Parquets de Entrada (Sempre lidos de V2)
 PARQUET_ZSCORE   = DIR_PROJETO_V2 / "data" / "eurusd_h1_zscore.parquet"
 PARQUET_MOMENTUM = DIR_PROJETO_V2 / "data" / "eurusd_h1_momentum.parquet"
-PARQUET_HAWKES       = DIR_PROJETO_V2 / "data" / "eurusd_h1_hawkes.parquet"
+PARQUET_OU       = DIR_PROJETO_V2 / "data" / "eurusd_h1_ou.parquet"
 
 # Parâmetros de Simulação
 CAPITAL_INICIAL    = 10_000.0   # USD
@@ -88,7 +88,7 @@ FATOR_PIPS         = 10_000.0   # 1 pip = 0.0001 no EURUSD
 
 # Regras de Saída Neutra
 Z_NEUTRO_MIN, Z_NEUTRO_MAX = -0.5, 0.5
-LAMBDA_NORM_SAIDA = 0.6
+OU_NEUTRO_MIN, OU_NEUTRO_MAX = -0.3, 0.3
 
 # Paleta de Cores Premium (Dark Mode)
 COR_FUNDO      = "#0D1117"
@@ -96,7 +96,7 @@ COR_TEXTO      = "#E6EDF3"
 COR_GRADE      = "#21262D"
 COR_ZSCORE     = "#A371F7"   # Roxo
 COR_MOMENTUM   = "#F0A500"   # Laranja
-COR_HAWKES         = "#00E676"   # Verde Esmeralda
+COR_OU         = "#00E676"   # Verde Esmeralda
 COR_COMBINADA  = "#58A6FF"   # Azul Celeste
 COR_POSITIVO   = "#3FB950"   # Verde
 COR_NEGATIVO   = "#F85149"   # Vermelho
@@ -105,7 +105,7 @@ COR_REFERENCIA = "#484F58"   # Cinza
 # Cores de Drawdown Correspondentes
 COR_DD_Z = "#503080"
 COR_DD_M = "#805000"
-COR_DD_H = "#006030"
+COR_DD_O = "#006030"
 COR_DD_C = "#1E4F8A"
 
 # Períodos de regimes macroeconômicos
@@ -176,9 +176,14 @@ def verificar_saida_candle(
     sl_preco: float,
     tp_preco: float,
     zscore: Optional[float] = None,
-    hawkes_lambda_norm: Optional[float] = None,
+    ou_zscore: Optional[float] = None,
     usar_zscore_exit: bool = False,
-    usar_hawkes_exit: bool = False,
+    usar_ou_exit: bool = False,
+    wav_d_fase: Optional[float] = None,
+    wav_d_fase_prev: Optional[float] = None,
+    usar_wavelet_exit: bool = False,
+    curv_direcao: Optional[int] = None,
+    usar_curvatura_exit: bool = False,
 ) -> Tuple[bool, float, str]:
     """
     Verifica se houve batida de SL, TP ou saída neutra (Z-Score ou OU).
@@ -192,9 +197,15 @@ def verificar_saida_candle(
         if usar_zscore_exit and zscore is not None and not math.isnan(zscore):
             if Z_NEUTRO_MIN <= zscore <= Z_NEUTRO_MAX:
                 return True, close, "Z_NEUTRO"
-        if usar_hawkes_exit and hawkes_lambda_norm is not None and not math.isnan(hawkes_lambda_norm):
-            if hawkes_lambda_norm < 0.6:
-                return True, close, "HAWKES_NEUTRO"
+        if usar_ou_exit and ou_zscore is not None and not math.isnan(ou_zscore):
+            if OU_NEUTRO_MIN <= ou_zscore <= OU_NEUTRO_MAX:
+                return True, close, "OU_NEUTRO"
+        if usar_wavelet_exit and wav_d_fase is not None and wav_d_fase_prev is not None:
+            if wav_d_fase < 0 and wav_d_fase_prev >= 0:  # Inflexão para baixo anula compra
+                return True, close, "WAVELET_NEUTRO"
+        if usar_curvatura_exit and curv_direcao is not None:
+            if curv_direcao == -1:  # Pico de topo anula compra
+                return True, close, "CURVATURA_NEUTRO"
                 
     elif direcao == -1:  # SHORT
         if high >= sl_preco:
@@ -204,9 +215,15 @@ def verificar_saida_candle(
         if usar_zscore_exit and zscore is not None and not math.isnan(zscore):
             if Z_NEUTRO_MIN <= zscore <= Z_NEUTRO_MAX:
                 return True, close, "Z_NEUTRO"
-        if usar_hawkes_exit and hawkes_lambda_norm is not None and not math.isnan(hawkes_lambda_norm):
-            if hawkes_lambda_norm < 0.6:
-                return True, close, "HAWKES_NEUTRO"
+        if usar_ou_exit and ou_zscore is not None and not math.isnan(ou_zscore):
+            if OU_NEUTRO_MIN <= ou_zscore <= OU_NEUTRO_MAX:
+                return True, close, "OU_NEUTRO"
+        if usar_wavelet_exit and wav_d_fase is not None and wav_d_fase_prev is not None:
+            if wav_d_fase > 0 and wav_d_fase_prev <= 0:  # Inflexão para cima anula venda
+                return True, close, "WAVELET_NEUTRO"
+        if usar_curvatura_exit and curv_direcao is not None:
+            if curv_direcao == 1:  # Pico de fundo anula venda
+                return True, close, "CURVATURA_NEUTRO"
                 
     return False, 0.0, ""
 
@@ -219,8 +236,10 @@ def simular_estrategia(
     coluna_sinal: str,
     nome: str,
     usar_zscore_exit: bool = False,
-    usar_hawkes_exit: bool = False,
+    usar_ou_exit: bool = False,
     is_combinada: bool = False,
+    usar_wavelet_exit: bool = False,
+    usar_curvatura_exit: bool = False,
 ) -> List[Operacao]:
     """
     Executa backtest manual e fiel candle a candle para a estratégia selecionada.
@@ -240,16 +259,22 @@ def simular_estrategia(
     closes = df["Close"].values.astype(np.float64)
     sinais = df[coluna_sinal].values.astype(np.int8)
     
-    # Parâmetros de Stop de cada estratégia
-    sl_z = df["sl_pips_zscore"].values.astype(np.float64)
-    tp_z = df["tp_pips_zscore"].values.astype(np.float64)
-    sl_m = df["sl_pips_momentum"].values.astype(np.float64)
-    tp_m = df["tp_pips_momentum"].values.astype(np.float64)
-    sl_o = df["sl_pips_hawkes"].values.astype(np.float64)
-    tp_o = df["tp_pips_hawkes"].values.astype(np.float64)
+    # Parâmetros de Stop da estratégia
+    sl = df[f"sl_pips_{nome.lower()}"].values.astype(np.float64)
+    tp = df[f"tp_pips_{nome.lower()}"].values.astype(np.float64)
     
     zscores = df["zscore"].values.astype(np.float64) if "zscore" in df.columns else None
-    hawkes_lambda_norms = df["hawkes_lambda_norm"].values.astype(np.float64) if "hawkes_lambda_norm" in df.columns else None
+    ou_zscores = df["ou_zscore"].values.astype(np.float64) if "ou_zscore" in df.columns else None
+    
+    if "wav_d_fase" in df.columns:
+        wav_d_fases = df["wav_d_fase"].values.astype(np.float64)
+        wav_d_fases_prev = np.roll(wav_d_fases, 1)
+        wav_d_fases_prev[0] = 0
+    else:
+        wav_d_fases = None
+        wav_d_fases_prev = None
+        
+    curv_direcoes = df["curv_direcao"].values.astype(np.int8) if "curv_direcao" in df.columns else None
     
     origens = df["origem_sinal"].values.astype(np.int8) if "origem_sinal" in df.columns else None
     
@@ -285,21 +310,29 @@ def simular_estrategia(
             else:
                 # Determinar quais saídas neutras monitorar dependendo da posição
                 z_val = zscores[i] if zscores is not None else None
-                o_val = hawkes_lambda_norms[i] if hawkes_lambda_norms is not None else None
+                o_val = ou_zscores[i] if ou_zscores is not None else None
+                wav_val = wav_d_fases[i] if wav_d_fases is not None else None
+                wav_prev = wav_d_fases_prev[i] if wav_d_fases_prev is not None else None
+                curv_val = curv_direcoes[i] if curv_direcoes is not None else None
                 
                 u_z_exit = usar_zscore_exit
-                u_o_exit = usar_hawkes_exit
+                u_o_exit = usar_ou_exit
+                u_w_exit = (nome == "WAVELET")
+                u_c_exit = (nome == "CURVATURA")
                 
                 if is_combinada and posicao.motivo_saida == "":
-                    # Na combinada, extraímos o comportamento da origem do trade
-                    orig = posicao.estrategia  # Nós guardamos o sub-sistema aqui temporariamente
+                    orig = posicao.estrategia
                     u_z_exit = (orig == "ZSCORE")
-                    u_o_exit = (orig == "HAWKES")
+                    u_o_exit = (orig == "OU" or orig == "HAWKES")
+                    u_w_exit = (orig == "WAVELET")
+                    u_c_exit = (orig == "CURVATURA")
                 
                 deve_fechar, preco_saida, motivo = verificar_saida_candle(
                     posicao.direcao, highs[i], lows[i], closes[i],
                     posicao.sl_preco, posicao.tp_preco,
-                    z_val, o_val, u_z_exit, u_o_exit
+                    z_val, o_val, u_z_exit, u_o_exit,
+                    wav_d_fase=wav_val, wav_d_fase_prev=wav_prev, usar_wavelet_exit=u_w_exit,
+                    curv_direcao=curv_val, usar_curvatura_exit=u_c_exit
                 )
                 
                 if deve_fechar:
@@ -323,34 +356,9 @@ def simular_estrategia(
                 continue
                 
             # Identificar parâmetros de stop
-            sl_pips, tp_pips = 0.0, 0.0
+            sl_pips, tp_pips = sl[i], tp[i]
             orig_nome = nome
             
-            if is_combinada and origens is not None:
-                orig_s = origens[i]
-                if orig_s == 1:  # OU
-                    sl_pips = sl_o[i]
-                    tp_pips = tp_o[i]
-                    orig_nome = "HAWKES"
-                elif orig_s == 2:  # ZSCORE
-                    sl_pips = sl_z[i]
-                    tp_pips = tp_z[i]
-                    orig_nome = "ZSCORE"
-                elif orig_s == 3:  # MOMENTUM
-                    sl_pips = sl_m[i]
-                    tp_pips = tp_m[i]
-                    orig_nome = "MOMENTUM"
-            else:
-                if nome == "ZSCORE":
-                    sl_pips = sl_z[i]
-                    tp_pips = tp_z[i]
-                elif nome == "MOMENTUM":
-                    sl_pips = sl_m[i]
-                    tp_pips = tp_m[i]
-                elif nome == "HAWKES":
-                    sl_pips = sl_o[i]
-                    tp_pips = tp_o[i]
-                    
             if not (math.isfinite(sl_pips) and sl_pips > 0 and math.isfinite(tp_pips) and tp_pips > 0):
                 continue
                 
@@ -622,12 +630,11 @@ def gerar_grafico_equity_curves(
     mapa_visual = {
         "ZSCORE":    (COR_ZSCORE,    COR_DD_Z),
         "MOMENTUM":  (COR_MOMENTUM,  COR_DD_M),
-        "HAWKES":    (COR_HAWKES,    COR_DD_H),
         "COMBINADA": (COR_COMBINADA, COR_DD_C)
     }
     
     for nome, eq in equity_curves.items():
-        cor, cor_dd = mapa_visual[nome]
+        cor, cor_dd = mapa_visual.get(nome, ("#58A6FF", "#1E4F8A"))
         cap_f = eq.iloc[-1]
         pct_f = (cap_f / CAPITAL_INICIAL - 1) * 100
         n_ops = len(todas_operacoes[nome])
@@ -699,10 +706,10 @@ def salvar_arquivos_resultados(
                 "capital_entrada": round(op.capital_entrada, 2),
             })
             
-    df_hps = pd.DataFrame(registros)
+    df_ops = pd.DataFrame(registros)
     for caminho in caminhos_ops:
         caminho.parent.mkdir(parents=True, exist_ok=True)
-        df_hps.to_csv(caminho, index=False)
+        df_ops.to_csv(caminho, index=False)
         logger.info(f"operacoes.csv gravado com sucesso em: {caminho.resolve()}")
         
     # 2. metricas.csv
@@ -716,133 +723,82 @@ def salvar_arquivos_resultados(
 # CONTROLADOR DO PIPELINE DO BACKTEST
 # =============================================================================
 
-def processar_pipeline_backtest():
-    """
-    Controla o carregamento dos parquets, mesclagem das colunas e execução de backtests.
-    """
-    logger.info("Verificando bases de dados do ZScore, Momentum e Ornstein-Uhlenbeck...")
-    for p in [PARQUET_ZSCORE, PARQUET_MOMENTUM, PARQUET_HAWKES]:
-        if not p.exists():
-            raise FileNotFoundError(
-                f"Parquet necessário não encontrado em: {p.name}\n"
-                f"Por favor execute primeiro o módulo correspondente."
-            )
+def processar_pipeline_backtest(estrategia: str):
+    estrategia = estrategia.upper()
+    logger.info(f"Iniciando pipeline de backtest individual para a estratégia {estrategia}...")
+    
+    # Identificar o parquet correto
+    parquet_map = {
+        "ZSCORE": PARQUET_ZSCORE,
+        "MOMENTUM": PARQUET_MOMENTUM,
+        "OU": PARQUET_OU
+    }
+    
+    caminho_parquet = parquet_map.get(estrategia, DIR_PROJETO_V2 / "data" / f"eurusd_h1_{estrategia.lower()}.parquet")
+    
+    if not caminho_parquet.exists():
+        raise FileNotFoundError(f"Arquivo parquet não encontrado: {caminho_parquet.name}")
+        
+    logger.info(f"Carregando dados: {caminho_parquet.name}")
+    df = pd.read_parquet(caminho_parquet, engine="pyarrow")
+    
+    # Padronizar colunas para o simulador
+    col_sinal = f"sinal_{estrategia.lower()}"
+    if col_sinal not in df.columns:
+        if "sinal" in df.columns:
+            col_sinal = "sinal"
+        else:
+            raise ValueError(f"Coluna de sinal {col_sinal} não encontrada no dataframe.")
             
-    logger.info("Carregando parquets...")
-    df_z = pd.read_parquet(PARQUET_ZSCORE, engine="pyarrow")
-    df_m = pd.read_parquet(PARQUET_MOMENTUM, engine="pyarrow")
-    df_h = pd.read_parquet(PARQUET_HAWKES, engine="pyarrow")
+    # Criar colunas temporárias para compatibilidade com simular_estrategia
+    df[f"sl_pips_{estrategia.lower()}"] = df["sl_pips"] if "sl_pips" in df.columns else df.get(f"sl_pips_{estrategia.lower()}", 0)
+    df[f"tp_pips_{estrategia.lower()}"] = df["tp_pips"] if "tp_pips" in df.columns else df.get(f"tp_pips_{estrategia.lower()}", 0)
     
-    # Mesclar dados de forma segura
-    df = df_z.copy()
+    logger.info(f"Simulando {len(df):,} candles H1 no período de backtest.")
     
-    # Adicionar indicadores e stop loss de Momentum
-    df["sinal_momentum"] = df_m["sinal_momentum"].reindex(df.index, fill_value=0)
-    df["sl_pips_zscore"] = df_z["sl_pips"].reindex(df.index)
-    df["tp_pips_zscore"] = df_z["tp_pips"].reindex(df.index)
+    ops = simular_estrategia(
+        df, 
+        col_sinal, 
+        estrategia, 
+        usar_zscore_exit=(estrategia == "ZSCORE"), 
+        usar_ou_exit=(estrategia == "OU" or estrategia == "HAWKES"),
+        usar_wavelet_exit=(estrategia == "WAVELET"),
+        usar_curvatura_exit=(estrategia == "CURVATURA")
+    )
     
-    df["sl_pips_momentum"] = df_m["sl_pips"].reindex(df.index)
-    df["tp_pips_momentum"] = df_m["tp_pips"].reindex(df.index)
+    eq = construir_equity_curve(ops, df.index)
     
-    # Adicionar indicadores e stop loss de Ornstein-Uhlenbeck
-    df["sinal_hawkes"] = df_h["sinal_hawkes"].reindex(df.index, fill_value=0)
-    df["hawkes_lambda_norm"] = df_h["hawkes_lambda_norm"].reindex(df.index)
-    df["sl_pips_hawkes"] = df_h["sl_pips"].reindex(df.index)
-    df["tp_pips_hawkes"] = df_h["tp_pips"].reindex(df.index)
+    equity_curves = {estrategia: eq}
+    todas_operacoes = {estrategia: ops}
     
-    logger.info(f"Dados unificados com sucesso! {len(df):,} candles H1 no período de backtest.")
-    
-    # 3. Montar sinal combinado de portfólio
-    # Prioridade estrita: 1. ZSCORE -> 2. MOMENTUM
-    sinal_comb = np.zeros(len(df), dtype=np.int8)
-    origem_sinal = np.zeros(len(df), dtype=np.int8)  # 2 = ZSCORE, 3 = MOMENTUM
-    
-    s_z = df["sinal_zscore"].values
-    s_m = df["sinal_momentum"].values
-    s_h = df["sinal_hawkes"].values
-    
-    for i in range(len(df)):
-        if s_z[i] != 0:
-            sinal_comb[i] = s_z[i]
-            origem_sinal[i] = 2
-        elif s_m[i] != 0:
-            sinal_comb[i] = s_m[i]
-            origem_sinal[i] = 3
-        elif s_h[i] != 0:
-            sinal_comb[i] = s_h[i]
-            origem_sinal[i] = 1
-            
-    df["sinal_combinado"] = sinal_comb
-    df["origem_sinal"] = origem_sinal
-    
-    n_z_tot = (s_z != 0).sum()
-    n_m_tot = (s_m != 0).sum()
-    n_comb_tot = (sinal_comb != 0).sum()
-    
-    logger.info(f"Sinais na base: ZScore={n_z_tot} | Momentum={n_m_tot} | Combinada={n_comb_tot}")
-    
-    # ── Simulações Individuais ──
-    ops_z = simular_estrategia(df, "sinal_zscore", "ZSCORE", usar_zscore_exit=True)
-    ops_m = simular_estrategia(df, "sinal_momentum", "MOMENTUM", usar_zscore_exit=False)
-    ops_h = simular_estrategia(df, "sinal_hawkes", "HAWKES", usar_hawkes_exit=True)
-    ops_c = simular_estrategia(df, "sinal_combinado", "COMBINADA", is_combinada=True)
-    
-    # ── Construção de Equity Curves ──
-    eq_z = construir_equity_curve(ops_z, df.index)
-    eq_m = construir_equity_curve(ops_m, df.index)
-    eq_h = construir_equity_curve(ops_h, df.index)
-    eq_c = construir_equity_curve(ops_c, df.index)
-    
-    equity_curves = {"ZSCORE": eq_z, "MOMENTUM": eq_m, "HAWKES": eq_h, "COMBINADA": eq_c}
-    todas_operacoes = {"ZSCORE": ops_z, "MOMENTUM": ops_m, "HAWKES": ops_h, "COMBINADA": ops_c}
-    
-    # ── Métricas Completas de Performance ──
     print(f"\n" + "█" * 70)
-    print("█   MÉTRICAS DE PERFORMANCE COMPLETAS (Série Histórica Total)  █")
+    print(f"█   MÉTRICAS DE PERFORMANCE ({estrategia})  █")
     print("█" * 70)
     
-    todas_metricas = {}
-    for nome in ["ZSCORE", "MOMENTUM", "HAWKES", "COMBINADA"]:
-        ops = todas_operacoes[nome]
-        eq = equity_curves[nome]
-        m = calcular_metricas_performance(ops, eq, nome)
-        todas_metricas[nome] = m
-        exibir_metricas(m)
-        
-    # ── Análise por Período de Regimes ──
+    m = calcular_metricas_performance(ops, eq, estrategia)
+    todas_metricas = {estrategia: m}
+    exibir_metricas(m)
+    
     executar_analise_periodos(df, todas_operacoes)
     
-    # ── Geração de Gráfico de Equity Curves ──
-    caminhos_grafico = [
-        DIR_PROJETO_V2 / "graficos" / "equity_curves.png"
-    ]
+    caminhos_grafico = [DIR_PROJETO_V2 / "graficos" / f"equity_curve_{estrategia.lower()}.png"]
     gerar_grafico_equity_curves(equity_curves, todas_operacoes, caminhos_grafico)
     
-    # ── Gravação de Resultados ──
-    caminhos_ops = [
-        DIR_PROJETO_V2 / "resultados" / "operacoes.csv"
-    ]
-    caminhos_met = [
-        DIR_PROJETO_V2 / "resultados" / "metricas.csv"
-    ]
+    caminhos_ops = [DIR_PROJETO_V2 / "resultados" / f"operacoes_{estrategia.lower()}.csv"]
+    caminhos_met = [DIR_PROJETO_V2 / "resultados" / f"metricas_{estrategia.lower()}.csv"]
     salvar_arquivos_resultados(todas_operacoes, todas_metricas, caminhos_ops, caminhos_met)
     
-    # Resumo Executivo Rápido
     print(f"\n" + "█" * 75)
-    print("█   TABELA COMPACTA DE PERFORMANCE")
+    print("█   RESUMO RÁPIDO")
     print("█" + "─" * 73)
-    print(f"  {'Estratégia':<11} | {'Ops':>4} | {'WinRate':>7} | {'PnL Total':>12} | {'Drawdown':>8} | {'Sharpe':>7}")
-    print("  " + "─" * 71)
-    
-    for nome, m in todas_metricas.items():
-        print(
-            f"  {nome:<11} | {m['total_operacoes']:>4} | "
-            f"{m['win_rate']:>6.2f}% | "
-            f"${m['pnl_total_usd']:>+9.2f} ({m['pnl_total_pct']:>+5.2f}%) | "
-            f"{m['drawdown_max_pct']:>7.2f}% | "
-            f"{m['sharpe_ratio']:>+6.3f}"
-        )
-    print("█" * 75 + "\n")
+    print(
+        f"  {estrategia:<11} | {m['total_operacoes']:>4} ops | "
+        f"{m['win_rate']:>6.2f}% WR | "
+        f"${m['pnl_total_usd']:>+9.2f} ({m['pnl_total_pct']:>+5.2f}%) | "
+        f"{m['drawdown_max_pct']:>7.2f}% DD | "
+        f"{m['sharpe_ratio']:>+6.3f} SR"
+    )
+    print("█" * 75 + "\\n")
 
 # =============================================================================
 # CLI
@@ -850,22 +806,22 @@ def processar_pipeline_backtest():
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Backtester Manual Multiestratégia EURUSD H1",
+        description="Backtester Manual Individual EURUSD H1",
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("--estrategia", type=str, required=True, help="Nome da estratégia (ex: ZSCORE, MOMENTUM, OU, NOVA)")
     args = parser.parse_args()
     
     print("\n" + "█" * 70)
     print("█" + " " * 68 + "█")
-    print("█   INICIANDO PIPELINE DE BACKTEST MULTIESTRATÉGIA EURUSD H1   █")
+    print(f"█   INICIANDO BACKTEST INDIVIDUAL: {args.estrategia.upper():<33} █")
     print("█   Capital Inicial: $10.000 | Risco por operação: 1%          █")
-    print("█   Ativos simulados: ZScore, Momentum, OU, Combinada          █")
     print("█" + " " * 68 + "█")
     print("█" * 70)
     
     try:
-        processar_pipeline_backtest()
-        print("✅ Simulação Histórica (Backtest) concluída com sucesso!\n")
+        processar_pipeline_backtest(args.estrategia)
+        print("✅ Simulação Histórica Individual concluída com sucesso!\\n")
     except Exception as e:
         logger.exception("Erro crítico durante a execução do backtest:")
         sys.exit(1)
