@@ -251,9 +251,18 @@ def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series, trades: 
         "font.family":      "monospace",
     })
 
-    # 2. Gerar Gráfico de Equity Curve e Drawdown em 2 painéis
-    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 8), sharex=True, gridspec_kw={"height_ratios": [3, 1]})
+    # Criar figura com GridSpec: lado esquerdo (grafico) e lado direito (tabela)
+    import matplotlib.gridspec as gridspec
+    fig = plt.figure(figsize=(20, 8.5))
+    fig.patch.set_facecolor('#0D1117')
     
+    gs = gridspec.GridSpec(2, 2, width_ratios=[3, 1.2], height_ratios=[3, 1])
+    
+    ax1 = fig.add_subplot(gs[0, 0])
+    ax2 = fig.add_subplot(gs[1, 0], sharex=ax1)
+    ax_tbl = fig.add_subplot(gs[:, 1])
+    
+    # --- Painel 1: Equity Curve ---
     cor_pnl = "#58A6FF" if metricas["pnl_pct"] >= 0 else "#FF7B72"
     ax1.plot(equity_curve.index, equity_curve.values, color=cor_pnl, linewidth=1.8, label="Curva OOS")
     ax1.fill_between(equity_curve.index, CAPITAL_INICIAL, equity_curve.values,
@@ -267,22 +276,14 @@ def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series, trades: 
     ax1.grid(True)
     ax1.legend(loc="upper left")
     
+    # --- Painel 2: Drawdown ---
     ax2.fill_between(metricas["dd_serie"].index, metricas["dd_serie"].values, 0, color="#FF7B72", alpha=0.3)
     ax2.plot(metricas["dd_serie"].index, metricas["dd_serie"].values, color="#FF7B72", linewidth=1.0)
     ax2.set_ylabel("Drawdown (%)", fontsize=10)
     ax2.set_xlabel("Data", fontsize=10)
     ax2.grid(True)
     
-    img_eq_path = dir_saida / f"equity_curve_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}_{param_id}.png"
-    plt.tight_layout()
-    plt.savefig(img_eq_path, dpi=150, bbox_inches="tight")
-    plt.close()
-    print(f"[GRAFICO] Equity curve salvo em: {img_eq_path}")
-
-    # 3. Gerar Tabela Metricas PNG em Alta Resolução (Dark Premium)
-    fig_tbl, ax_tbl = plt.subplots(figsize=(6, 4.5), dpi=150)
-    fig_tbl.patch.set_facecolor('#0D1117')
-    ax_tbl.set_facecolor('#0D1117')
+    # --- Painel 3: Tabela de Métricas (Lado Direito) ---
     ax_tbl.axis('tight')
     ax_tbl.axis('off')
     
@@ -311,10 +312,12 @@ def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series, trades: 
             cell.set_text_props(color='#E6EDF3')
             cell.set_facecolor('#0D1117' if row % 2 == 0 else '#161B22')
             
-    img_tbl_path = dir_saida / f"tabela_metricas_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}_{param_id}.png"
-    plt.savefig(img_tbl_path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
+    # Salvar a imagem única unificada
+    img_unica_path = dir_saida / f"relatorio_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}_{param_id}.png"
+    plt.tight_layout()
+    plt.savefig(img_unica_path, dpi=150, bbox_inches="tight", facecolor='#0D1117')
     plt.close()
-    print(f"[TABELA] Tabela de métricas salva em: {img_tbl_path}")
+    print(f"[RELATORIO UNIFICADO] Relatório salvo em: {img_unica_path}")
 
 
 # ===================================================================
@@ -416,6 +419,12 @@ def main():
     # Carregar séries
     print("[DADOS] Carregando série temporal OOS...")
     df_comp = pd.read_parquet(parquet_completo)
+    if "hurst" not in df_comp.columns:
+        parquet_hurst = dir_data / f"{ativo.lower()}_{timeframe.lower()}_hurst.parquet"
+        if parquet_hurst.exists():
+            print(f"[DADOS] Carregando coluna 'hurst' ausente a partir de {parquet_hurst.name}...")
+            df_hurst = pd.read_parquet(parquet_hurst, columns=["hurst"])
+            df_comp = df_comp.join(df_hurst, how="left")
     
     if not isinstance(df_comp.index, pd.DatetimeIndex):
         for col in ("time", "datetime"):

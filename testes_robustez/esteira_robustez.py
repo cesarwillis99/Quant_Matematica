@@ -23,6 +23,45 @@ if str(DIR_PROJETO) not in sys.path:
 from testes_robustez.distribuicao_parametros.distribuicao_parametros import calcular_sinais
 from backtests.backtest_individual import simular_estrategia, Operacao
 
+def calcular_hurst(retornos: np.ndarray, janela: int = 100) -> np.ndarray:
+    n = len(retornos)
+    hurst_values = np.full(n, 0.5, dtype=np.float32)
+    if n < janela:
+        return hurst_values
+    lags = [10, 20, 40, 80]
+    for i in range(janela - 1, n):
+        window = retornos[i - janela + 1 : i + 1]
+        log_n = []
+        log_rs = []
+        for lag in lags:
+            num_segmentos = janela // lag
+            rs_segmentos = []
+            for k in range(num_segmentos):
+                segmento = window[k * lag : (k + 1) * lag]
+                mu = segmento.mean()
+                if len(segmento) == 0: continue
+                y_t = np.cumsum(segmento - mu)
+                r_range = y_t.max() - y_t.min()
+                s_std = segmento.std(ddof=1)
+                if s_std > 0:
+                    rs_segmentos.append(r_range / s_std)
+            if rs_segmentos:
+                rs_medio = np.mean(rs_segmentos)
+                if rs_medio > 0:
+                    log_n.append(np.log(lag))
+                    log_rs.append(np.log(rs_medio))
+        if len(log_n) >= 2:
+            x = np.array(log_n)
+            y = np.array(log_rs)
+            x_mean = x.mean()
+            y_mean = y.mean()
+            num = ((x - x_mean) * (y - y_mean)).sum()
+            den = ((x - x_mean) ** 2).sum()
+            h = num / den if den != 0 else np.nan
+            if np.isfinite(h) and 0.0 <= h <= 1.5:
+                hurst_values[i] = h
+    return hurst_values
+
 # --- WRAPPERS DOS TESTES ---
 # Os testes agora serão importados e executados como funções python, passando os parâmetros
 def run_oos_futuro(params, ativo, timeframe, estrategia, param_id, df_ops, dir_saida, df_comp=None) -> bool:
@@ -30,7 +69,7 @@ def run_oos_futuro(params, ativo, timeframe, estrategia, param_id, df_ops, dir_s
     especific_dir = os.path.join(dir_saida, "oos_futuro", estrategia.lower())
     os.makedirs(especific_dir, exist_ok=True)
     
-    dir_data = Path(dir_saida).parent / "data"
+    dir_data = DIR_PROJETO / f"quant_{ativo.lower()}_{timeframe.lower()}" / "data"
     padrao = f"{ativo.lower()}_{timeframe.lower()}_completo_OOS_futuro_*.parquet"
     arquivos = list(dir_data.glob(padrao))
     if not arquivos:
@@ -39,7 +78,21 @@ def run_oos_futuro(params, ativo, timeframe, estrategia, param_id, df_ops, dir_s
         
     sufixo_ano = arquivos[0].stem.split("_OOS_futuro_")[1]
     df_oos = pd.read_parquet(arquivos[0])
-    
+    if "hurst" not in df_oos.columns:
+        parquet_hurst = dir_data / f"{ativo.lower()}_{timeframe.lower()}_hurst.parquet"
+        if parquet_hurst.exists():
+            df_hurst = pd.read_parquet(parquet_hurst, columns=["hurst"])
+            df_oos = df_oos.join(df_hurst, how="left")
+            
+    # Se hurst continuar nulo (caso de dados OOS novos sem indicadores históricos pré-calculados)
+    if "hurst" not in df_oos.columns or df_oos["hurst"].isna().any():
+        logger.info(f"[{param_id}] Calculando expoente de Hurst dinamicamente para OOS Futuro...")
+        if "log_return" not in df_oos.columns:
+            closes = df_oos["Close"].values
+            df_oos["log_return"] = np.log(closes / np.roll(closes, 1))
+            df_oos["log_return"].iloc[0] = 0.0
+        df_oos["hurst"] = calcular_hurst(df_oos["log_return"].values, janela=100)
+            
     res = rodar_oos_na_esteira(df_oos, params, estrategia, ativo, timeframe, "FUTURO", sufixo_ano, Path(especific_dir), param_id)
     if res and res.get('aprovado', False):
         return True
@@ -50,7 +103,7 @@ def run_oos_passado(params, ativo, timeframe, estrategia, param_id, df_ops, dir_
     especific_dir = os.path.join(dir_saida, "oos_passado", estrategia.lower())
     os.makedirs(especific_dir, exist_ok=True)
     
-    dir_data = Path(dir_saida).parent / "data"
+    dir_data = DIR_PROJETO / f"quant_{ativo.lower()}_{timeframe.lower()}" / "data"
     padrao = f"{ativo.lower()}_{timeframe.lower()}_completo_OOS_passado_*.parquet"
     arquivos = list(dir_data.glob(padrao))
     if not arquivos:
@@ -59,7 +112,21 @@ def run_oos_passado(params, ativo, timeframe, estrategia, param_id, df_ops, dir_
         
     sufixo_ano = arquivos[0].stem.split("_OOS_passado_")[1]
     df_oos = pd.read_parquet(arquivos[0])
-    
+    if "hurst" not in df_oos.columns:
+        parquet_hurst = dir_data / f"{ativo.lower()}_{timeframe.lower()}_hurst.parquet"
+        if parquet_hurst.exists():
+            df_hurst = pd.read_parquet(parquet_hurst, columns=["hurst"])
+            df_oos = df_oos.join(df_hurst, how="left")
+            
+    # Se hurst continuar nulo (caso de dados OOS novos sem indicadores históricos pré-calculados)
+    if "hurst" not in df_oos.columns or df_oos["hurst"].isna().any():
+        logger.info(f"[{param_id}] Calculando expoente de Hurst dinamicamente para OOS Passado...")
+        if "log_return" not in df_oos.columns:
+            closes = df_oos["Close"].values
+            df_oos["log_return"] = np.log(closes / np.roll(closes, 1))
+            df_oos["log_return"].iloc[0] = 0.0
+        df_oos["hurst"] = calcular_hurst(df_oos["log_return"].values, janela=100)
+            
     res = rodar_oos_na_esteira(df_oos, params, estrategia, ativo, timeframe, "PASSADO", sufixo_ano, Path(especific_dir), param_id)
     if res and res.get('aprovado', False):
         return True
@@ -107,17 +174,26 @@ def run_what_if(params, ativo, timeframe, estrategia, param_id, df_ops, dir_said
     return False
 
 def run_distribuicao_parametros(params, ativo, timeframe, estrategia, param_id, df_ops, dir_saida, df_comp=None) -> bool:
+    from testes_robustez.distribuicao_parametros.distribuicao_parametros import rodar_distribuicao_na_esteira
     especific_dir = os.path.join(dir_saida, "distribuicao_parametros", estrategia.lower())
     os.makedirs(especific_dir, exist_ok=True)
-    logger.info(f"Executando Distribuição de Parâmetros para params ID {params.get('id', 'N/A')}")
-    return True
+    
+    if df_comp is None:
+        logger.warning("DF completo nao fornecido para Distribuicao de Parametros.")
+        return True
+        
+    logger.info(f"Executando Distribuicao de Parametros para params ID {param_id}")
+    res = rodar_distribuicao_na_esteira(df_comp, params, estrategia, ativo, timeframe, Path(especific_dir), param_id)
+    if res and res.get('aprovado', False):
+        return True
+    return False
 
 def run_wfa(params, ativo, timeframe, estrategia, param_id, df_ops, dir_saida, df_comp=None) -> bool:
     from testes_robustez.w_f_a.walk_forward_matrix import rodar_wfm_na_esteira
     especific_dir = os.path.join(dir_saida, "w_f_a", estrategia.lower())
     os.makedirs(especific_dir, exist_ok=True)
     
-    dir_data = Path(dir_saida).parent / "data"
+    dir_data = DIR_PROJETO / f"quant_{ativo.lower()}_{timeframe.lower()}" / "data"
     parquet_otim = dir_data / "otimizacoes" / f"otimizacao_{estrategia.lower()}_resultados.parquet"
     
     if df_comp is None or not parquet_otim.exists():
@@ -125,7 +201,7 @@ def run_wfa(params, ativo, timeframe, estrategia, param_id, df_ops, dir_saida, d
         return True
         
     df_comb = pd.read_parquet(parquet_otim)
-    res = rodar_wfm_na_esteira(df_comp, df_comb, f"{estrategia}_{param_id}", ativo, timeframe, Path(especific_dir))
+    res = rodar_wfm_na_esteira(df_comp, df_comb, estrategia, ativo, timeframe, Path(especific_dir))
     if res and res.get('aprovado', False):
         return True
     return False
@@ -139,7 +215,10 @@ def run_permutacao(params, ativo, timeframe, estrategia, param_id, df_ops, dir_s
         logger.warning("DF completo não fornecido para Permutacao.")
         return True
         
-    res = rodar_permutacao_na_esteira(df_comp, params, f"{estrategia}_{param_id}", ativo, timeframe, Path(especific_dir))
+    meta_cols = {"id", "Trades", "Lucro_Total_Pips", "Max_DD_Pips", "Ret_DD", "Profit_Factor", "lucro", "drawdown"}
+    params_filtrados = {k: v for k, v in params.items() if k not in meta_cols}
+        
+    res = rodar_permutacao_na_esteira(df_comp, params_filtrados, estrategia, ativo, timeframe, Path(especific_dir))
     if res and res.get('aprovado', False):
         return True
     return False
@@ -161,6 +240,7 @@ def main():
     parser.add_argument("--ativo", type=str, required=True, help="Nome do ativo (ex: EURUSD)")
     parser.add_argument("--timeframe", type=str, required=True, help="Timeframe (ex: H1)")
     parser.add_argument("--estrategia", type=str, required=True, help="Nome da estratégia (ex: CURVATURA)")
+    parser.add_argument("--force_all", action="store_true", help="Força a execução de todos os testes apenas para a TOP1 para validação.")
     
     args = parser.parse_args()
     ativo = args.ativo.lower()
@@ -179,6 +259,10 @@ def main():
     with open(json_path, 'r') as f:
         top_params_list = json.load(f)
         
+    if args.force_all:
+        logger.info("⚠️ Modo DEBUG ativo: Rodando apenas a variação TOP1 e forçando execução completa de todos os testes!")
+        top_params_list = top_params_list[:1]
+        
     logger.info(f"[{ativo.upper()}_{timeframe.upper()} | {estrategia}] Iniciando Esteira para {len(top_params_list)} variações.")
     
     # Pre-carregar DataFrames base para geração de sinais
@@ -191,6 +275,22 @@ def main():
         
     logger.info(f"Carregando {parquet_completo}")
     df_comp = pd.read_parquet(parquet_completo)
+    
+    # Suporte dinâmico para colunas calculadas de indicadores que possam estar ausentes no completo
+    if "hurst" not in df_comp.columns:
+        parquet_hurst = data_dir / f"{ativo}_{timeframe}_hurst.parquet"
+        if parquet_hurst.exists():
+            logger.info(f"Carregando coluna 'hurst' ausente a partir de {parquet_hurst}")
+            df_hurst = pd.read_parquet(parquet_hurst, columns=["hurst"])
+            df_comp = df_comp.join(df_hurst, how="left")
+            
+    if "hurst" not in df_comp.columns or df_comp["hurst"].isna().any():
+        logger.info("Calculando expoente de Hurst dinamicamente para dados completos...")
+        if "log_return" not in df_comp.columns:
+            closes = df_comp["Close"].values
+            df_comp["log_return"] = np.log(closes / np.roll(closes, 1))
+            df_comp["log_return"].iloc[0] = 0.0
+        df_comp["hurst"] = calcular_hurst(df_comp["log_return"].values, janela=100)
     
     try:
         df_op = pd.read_parquet(parquet_op)
@@ -264,18 +364,63 @@ def main():
         
         aprovado = True
         
-        # 3. Esteira Fail-Fast
+        # Criar pasta temporária exclusiva para esta variação de parâmetro
+        dir_saida_temp = resultados_dir / f"temp_{param_id}"
+        os.makedirs(dir_saida_temp, exist_ok=True)
+        
+        # 3. Esteira Fail-Fast (Desabilitável via --force_all)
         for nome_teste, func_teste in ESTEIRA_DEGRAUS:
-            passou = func_teste(param_set, ativo, timeframe, estrategia, param_id, df_ops, str(resultados_dir), df_comp)
+            passou = func_teste(param_set, ativo, timeframe, estrategia, param_id, df_ops, str(dir_saida_temp), df_comp)
             
             if not passou:
-                logger.warning(f"❌ Variação ID {param_id} REPROVADA no teste: {nome_teste}. Interrompendo esteira (Fail-Fast).")
-                aprovado = False
-                break
+                if args.force_all:
+                    logger.warning(f"❌ [DEBUG] Variação ID {param_id} seria REPROVADA no teste: {nome_teste}. Continuando devido a --force_all.")
+                else:
+                    logger.warning(f"❌ Variação ID {param_id} REPROVADA no teste: {nome_teste}. Interrompendo esteira (Fail-Fast).")
+                    aprovado = False
+                    break
                 
-        if aprovado:
-            logger.info(f"✅ Variação ID {param_id} APROVADA em todos os {len(ESTEIRA_DEGRAUS)} testes de robustez!")
+        # Função interna de mover arquivos de forma flexível
+        import shutil
+        def mover_conteudo(src, dst, mover_apenas_imagens=False):
+            if not os.path.exists(src):
+                return
+            for item in os.listdir(src):
+                s = os.path.join(src, item)
+                d = os.path.join(dst, item)
+                if os.path.isdir(s):
+                    os.makedirs(d, exist_ok=True)
+                    mover_conteudo(s, d, mover_apenas_imagens)
+                    try:
+                        if not os.listdir(s):
+                            os.rmdir(s)
+                    except:
+                        pass
+                else:
+                    ext = os.path.splitext(item)[1].lower()
+                    eh_imagem = ext in ['.png', '.jpg', '.jpeg']
+                    if not mover_apenas_imagens or eh_imagem:
+                        if os.path.exists(d):
+                            try:
+                                os.remove(d)
+                            except:
+                                pass
+                        shutil.move(s, d)
+
+        if aprovado or args.force_all:
+            if args.force_all:
+                logger.info(f"✅ [DEBUG] Finalizando validação. Forçando mover completo para {param_id}.")
+            else:
+                logger.info(f"✅ Variação ID {param_id} APROVADA em todos os {len(ESTEIRA_DEGRAUS)} testes de robustez!")
             resultados_finais.append(param_set)
+            mover_conteudo(str(dir_saida_temp), str(resultados_dir), mover_apenas_imagens=True)
+        else:
+            logger.info(f"Movendo relatórios visuais da variação reprovada {param_id} para análise...")
+            mover_conteudo(str(dir_saida_temp), str(resultados_dir), mover_apenas_imagens=True)
+                
+        # Limpar diretório temporário após a execução (seja por falha ou sucesso)
+        if os.path.exists(dir_saida_temp):
+            shutil.rmtree(dir_saida_temp)
             
     logger.info(f"\nResumo: {len(resultados_finais)}/{len(top_params_list)} variações sobreviveraram à esteira.")
     

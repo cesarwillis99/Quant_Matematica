@@ -12,14 +12,24 @@ import json
 warnings.filterwarnings("ignore")
 
 # =============================================================================
-# CONSTANTES E CAMINHOS
+# CLI & CAMINHOS GENERICOS
 # =============================================================================
-DIR_PROJETO = Path(r"c:\Users\cesar\.gemini\antigravity\scratch\Quant_Matematica.Trade")
-DIR_DATA    = DIR_PROJETO / "quant_eurusd" / "data"
+parser = argparse.ArgumentParser()
+parser.add_argument("--ativo", type=str, required=True, help="Ex: eurusd")
+parser.add_argument("--timeframe", type=str, required=True, help="Ex: h1")
+args = parser.parse_args()
+
+ativo = args.ativo.lower()
+timeframe = args.timeframe.lower()
+estrategia_nome = "momentum"
+
+DIR_PROJETO = Path(__file__).resolve().parent.parent
+DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
 DIR_SAIDA   = DIR_DATA / "otimizacoes"
 
-PARQUET_ENTRADA = DIR_DATA / "eurusd_h1_hurst.parquet"
-ARQUIVO_SAIDA   = DIR_SAIDA / "otimizacao_momentum_resultados.parquet"
+PARQUET_ENTRADA = DIR_DATA / f"{ativo}_{timeframe}_hurst.parquet"
+ARQUIVO_SAIDA   = DIR_SAIDA / f"otimizacao_{estrategia_nome}_resultados.parquet"
+ARQUIVO_JSON    = DIR_SAIDA / f"otimizacao_{estrategia_nome}_top10.json"
 
 # =============================================================================
 # GRID SEARCH
@@ -226,11 +236,20 @@ def main():
         df_res = pd.DataFrame(resultados)
         df_res = df_res.sort_values(by="Ret_DD", ascending=False).reset_index(drop=True)
         df_res.to_parquet(ARQUIVO_SAIDA)
+        
+        # Gerar o JSON top10 com ID para a esteira
+        top10 = df_res.head(10).to_dict(orient="records")
+        for i, p in enumerate(top10):
+            p["id"] = f"{estrategia_nome.upper()}_TOP{i+1}"
+            
+        with open(ARQUIVO_JSON, 'w') as f:
+            json.dump(top10, f, indent=4)
+            
         print("\n================================================================================")
         print("TOP 10 PARAMETRIZAÇÕES MOMENTUM (RANKING POR RET/DD > 60 Trades):")
         print("================================================================================")
         print(df_res.head(10).to_string())
-        print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
+        print(f"\nResultados salvos em: {ARQUIVO_SAIDA} e {ARQUIVO_JSON}")
     else:
         print("Nenhuma combinação atingiu os critérios mínimos (60 trades).")
 

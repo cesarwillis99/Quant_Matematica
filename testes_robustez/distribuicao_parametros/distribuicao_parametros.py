@@ -1168,6 +1168,139 @@ def gerar_tabela_robustez(dir_res: Path, ativo: str, timeframe: str):
     print(f"\n[SUCESSO] Tabela resumo parametrizada gerada e salva em: {caminho_img}\n")
 
 
+def unificar_imagens_distribuicao(dir_res: Path, estrategia: str):
+    """
+    Unifica a imagem do grafico de distribuicao e a imagem da tabela resumo
+    em um unico arquivo PNG premium, com a tabela posicionada na parte de baixo.
+    """
+    import os
+    from PIL import Image
+    
+    caminho_grafico = dir_res / f"resultado_distribuicao_{estrategia.lower()}.png"
+    caminho_tabela = dir_res / "tabela_robustez_parametros.png"
+    
+    if not caminho_grafico.exists() or not caminho_tabela.exists():
+        return
+        
+    try:
+        img_grafico = Image.open(caminho_grafico)
+        img_tabela = Image.open(caminho_tabela)
+        
+        largura_grafico, altura_grafico = img_grafico.size
+        largura_tabela, altura_tabela = img_tabela.size
+        
+        # Redimensionar a tabela para que ela tenha a mesma largura que o grafico, mantendo a proporcao de aspecto
+        nova_altura_tabela = int((largura_grafico / largura_tabela) * altura_tabela)
+        img_tabela_res = img_tabela.resize((largura_grafico, nova_altura_tabela), Image.Resampling.LANCZOS)
+        
+        # Criar uma imagem combinada com fundo escuro (#0D1117)
+        nova_imagem = Image.new("RGBA", (largura_grafico, altura_grafico + nova_altura_tabela), (13, 17, 23, 255))
+        nova_imagem.paste(img_grafico, (0, 0))
+        nova_imagem.paste(img_tabela_res, (0, altura_grafico))
+        
+        # Salvar substituindo o grafico original
+        nova_imagem.save(caminho_grafico, "PNG")
+        print(f"\n[SUCESSO] Grafico e Tabela de robustez parametrica unificados em: {caminho_grafico}")
+        
+        # Remover a tabela individual para evitar poluicao
+        try:
+            os.remove(caminho_tabela)
+        except Exception as e:
+            print(f"Nao foi possivel remover a tabela intermediaria individual: {e}")
+            
+    except Exception as e:
+        print(f"Erro ao unificar imagens de robustez parametrica: {e}")
+
+
+# ===================================================================
+#  INTEGRACAO COM A ESTEIRA DE ROBUSTEZ
+# ===================================================================
+
+def rodar_distribuicao_na_esteira(df: pd.DataFrame, params: dict, estrategia: str, ativo: str, timeframe: str, dir_saida: Path, param_id: str) -> dict:
+    """
+    Funcao para rodar o teste de robustez por distribuicao de parametros diretamente da esteira.
+    """
+    import os
+    
+    # Criar pasta se nao existir
+    dir_saida_path = Path(dir_saida)
+    dir_saida_path.mkdir(parents=True, exist_ok=True)
+    
+    # Filtrar parametros extras/metadados
+    meta_cols = {"id", "Trades", "Lucro_Total_Pips", "Max_DD_Pips", "Ret_DD", "Profit_Factor", "lucro", "drawdown"}
+    params_filtrados = {k: v for k, v in params.items() if k not in meta_cols}
+    
+    # Configurar janela_op
+    if not isinstance(df.index, pd.DatetimeIndex):
+        df_copy = df.copy()
+        for col in ("time", "datetime"):
+            if col in df_copy.columns:
+                df_copy[col] = pd.to_datetime(df_copy[col])
+                df_copy = df_copy.set_index(col)
+                break
+        df = df_copy
+                
+    horas = df.index.strftime("%H:%M")
+    janela_op = (horas >= HORA_INICIO_OP) & (horas <= HORA_FIM_OP)
+    
+    cache = {}
+    
+    # Referencia (ponto otimo)
+    sinal_ref, sl_ref, tp_ref = calcular_sinais(df, params_filtrados, janela_op, estrategia, cache)
+    resultado_ref = rodar_backtest(df, sinal_ref, sl_ref, tp_ref, estrategia, cache)
+    dd_referencia = resultado_ref["dd_pct"]
+    
+    # Loop principal perturbando parametros
+    resultados_por_param = {}
+    for param_name, val_orig in params_filtrados.items():
+        # Certificar que eh um valor numerico que pode ser perturbado
+        if not isinstance(val_orig, (int, float, np.integer, np.floating)):
+            continue
+            
+        grid = gerar_grid(param_name, val_orig)
+        idx_otimo = int(np.argmin(np.abs(grid.astype(float) - float(val_orig))))
+        
+        resultados_steps = []
+        for val in grid:
+            params_teste = params_filtrados.copy()
+            params_teste[param_name] = float(val)
+            sinal, sl, tp = calcular_sinais(df, params_teste, janela_op, estrategia, cache)
+            resultado = rodar_backtest(df, sinal, sl, tp, estrategia, cache)
+            resultados_steps.append(resultado)
+            
+        criterios = avaliar_criterios(resultados_steps, dd_referencia)
+        resultados_por_param[param_name] = {
+            "grid": grid, "resultados": resultados_steps,
+            "criterios": criterios, "idx_otimo": idx_otimo,
+            "valor_original": val_orig,
+        }
+        
+    # Nova Regra de Robustez SQX customizada:
+    total_p = len(resultados_por_param)
+    aprovados = sum(1 for d in resultados_por_param.values() if d["criterios"]["passou"])
+    pct_aprovados = aprovados / total_p if total_p > 0 else 0.0
+    
+    todos_positivos = all(
+        res["pnl_pct"] >= 0.0
+        for d in resultados_por_param.values() 
+        for res in d["resultados"]
+    )
+    
+    passou_tudo = (pct_aprovados >= 0.80) and todos_positivos
+    
+    imprimir_relatorio(resultados_por_param, passou_tudo, estrategia, ativo, timeframe)
+    gerar_grafico(resultados_por_param, passou_tudo, estrategia, ativo, timeframe, dir_saida_path)
+    salvar_csv(resultados_por_param, estrategia, dir_saida_path)
+    gerar_tabela_robustez(dir_saida_path, ativo, timeframe)
+    unificar_imagens_distribuicao(dir_saida_path, estrategia)
+    
+    return {
+        "aprovado": passou_tudo,
+        "pct_aprovados": pct_aprovados,
+        "todos_positivos": todos_positivos
+    }
+
+
 # ===================================================================
 #  MAIN -- ORQUESTRADOR
 # ===================================================================
@@ -1267,6 +1400,7 @@ def main():
     gerar_grafico(resultados_por_param, passou_tudo, ESTRATEGIA, ATIVO, TIMEFRAME, dir_saida)
     salvar_csv(resultados_por_param, ESTRATEGIA, dir_saida)
     gerar_tabela_robustez(dir_saida, ATIVO, TIMEFRAME)
+    unificar_imagens_distribuicao(dir_saida, ESTRATEGIA)
 
     print("\n[OK] Teste de robustez finalizado com sucesso.\n")
 
