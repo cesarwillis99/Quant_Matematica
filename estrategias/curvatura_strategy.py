@@ -92,7 +92,7 @@ def calcular_curvatura() -> pd.DataFrame:
         raise FileNotFoundError(f"Base não encontrada: {PARQUET_COMPLETO}")
         
     df = pd.read_parquet(PARQUET_COMPLETO)
-    df_op = pd.read_parquet(PARQUET_OPERACIONALERACIONAL)
+    df_op = pd.read_parquet(PARQUET_OPERACIONAL)
     
     # ── 1. Referencial 3D (Tempo, Preço, Log-Retorno) ──
     logger.info("Mapeando espaço 3D e extraindo derivadas centrais...")
@@ -109,23 +109,12 @@ def calcular_curvatura() -> pd.DataFrame:
     A_y = np.zeros(n, dtype=np.float32)
     A_z = np.zeros(n, dtype=np.float32)
     
-    # Derivadas Centrais para o miolo (Look-Ahead Bias proposital para IA)
-    T_y[1:-1] = (C[2:] - C[:-2]) / 2.0
-    T_z[1:-1] = (R[2:] - R[:-2]) / 2.0
+    # Diferenças para Trás Causal (Sem Look-Ahead Bias)
+    T_y[1:] = C[1:] - C[:-1]
+    T_z[1:] = R[1:] - R[:-1]
     
-    A_y[1:-1] = C[2:] - 2*C[1:-1] + C[:-2]
-    A_z[1:-1] = R[2:] - 2*R[1:-1] + R[:-2]
-    
-    # Bordas
-    T_y[0] = C[1] - C[0]
-    T_z[0] = R[1] - R[0]
-    T_y[-1] = C[-1] - C[-2]
-    T_z[-1] = R[-1] - R[-2]
-    
-    A_y[0] = 0
-    A_z[0] = 0
-    A_y[-1] = C[-1] - 2*C[-2] + C[-3] if n > 2 else 0
-    A_z[-1] = R[-1] - 2*R[-2] + R[-3] if n > 2 else 0
+    A_y[2:] = C[2:] - 2*C[1:-1] + C[:-2]
+    A_z[2:] = R[2:] - 2*R[1:-1] + R[:-2]
     
     T = np.column_stack((T_x, T_y, T_z))
     A = np.column_stack((A_x, A_y, A_z))
@@ -187,20 +176,22 @@ def calcular_curvatura() -> pd.DataFrame:
     df["curv_Ty"] = T_y.astype(np.float32)
     df["curv_Ay"] = A_y.astype(np.float32)
     
-    # ── 5. Picos Geométricos de Curvatura ──
-    # pico[t]: kappa_norm[t] > kappa_norm[t-1] AND kappa_norm[t] > kappa_norm[t+1] AND kappa_norm[t] > 2.0
+    # ── 5. Picos Geométricos de Curvatura Causais (Confirmados com 1 lag) ──
     kn = df["curv_kappa_norm"].values
-    kn_prev = np.roll(kn, 1)
-    kn_next = np.roll(kn, -1)
-    kn_prev[0] = 0
-    kn_next[-1] = 0
+    kn_t1 = np.roll(kn, 1)
+    kn_t2 = np.roll(kn, 2)
+    kn_t1[0] = 0; kn_t1[1] = 0
+    kn_t2[0] = 0; kn_t2[1] = 0; kn_t2[2] = 0
     
-    pico_mask = (kn > kn_prev) & (kn > kn_next) & (kn > 2.0)
+    pico_mask = (kn_t1 > kn_t2) & (kn_t1 > kn) & (kn_t1 > 2.0)
     df["curv_pico"] = pico_mask
     
+    A_y_t1 = np.roll(A_y, 1)
+    A_y_t1[0] = 0
+    
     direcao = np.zeros(n, dtype=np.int8)
-    direcao[pico_mask & (A_y > 0)] = 1
-    direcao[pico_mask & (A_y < 0)] = -1
+    direcao[pico_mask & (A_y_t1 > 0)] = 1
+    direcao[pico_mask & (A_y_t1 < 0)] = -1
     df["curv_direcao"] = direcao
     
     # ── 6. Volatilidade e Gestão de Risco ──
@@ -224,8 +215,11 @@ def calcular_curvatura() -> pd.DataFrame:
     
     cond_comum = mask_op & pico_mask
     
-    cond_compra = cond_comum & (direcao == 1) & (tau_norm.values > 0) & (C < sma50)
-    cond_venda = cond_comum & (direcao == -1) & (tau_norm.values < 0) & (C > sma50)
+    tau_norm_t1 = np.roll(tau_norm.values, 1)
+    tau_norm_t1[0] = 0
+    
+    cond_compra = cond_comum & (direcao == 1) & (tau_norm_t1 > 0) & (C < sma50)
+    cond_venda = cond_comum & (direcao == -1) & (tau_norm_t1 < 0) & (C > sma50)
     
     sinais[cond_compra] = 1
     sinais[cond_venda] = -1
@@ -242,8 +236,8 @@ def calcular_curvatura() -> pd.DataFrame:
         "picos_fundos": int(total_picos_fundos),
         "picos_topos": int(total_picos_topos),
         "horario": int(np.sum(pico_mask & ~mask_op)),
-        "torcao": int(np.sum(cond_comum & (direcao != 0) & ~(( (direcao==1) & (tau_norm.values > 0) ) | ( (direcao==-1) & (tau_norm.values < 0) )))),
-        "sma50": int(np.sum(cond_comum & (direcao != 0) & (( (direcao==1) & (tau_norm.values > 0) ) | ( (direcao==-1) & (tau_norm.values < 0) ))) - np.sum(sinais != 0))
+        "torcao": int(np.sum(cond_comum & (direcao != 0) & ~(( (direcao==1) & (tau_norm_t1 > 0) ) | ( (direcao==-1) & (tau_norm_t1 < 0) )))),
+        "sma50": int(np.sum(cond_comum & (direcao != 0) & (( (direcao==1) & (tau_norm_t1 > 0) ) | ( (direcao==-1) & (tau_norm_t1 < 0) ))) - np.sum(sinais != 0))
     }
     
     return df

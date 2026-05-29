@@ -134,39 +134,9 @@ def gerar_combinacoes_aleatorias(params_otimos: dict, n_comb: int, perturb_pct: 
 
 
 # ===================================================================
-# PARTE 2 — RECÁLCULO DE SINAIS (MOMENTUM PREMIUM OTIMIZADO)
+# PARTE 2 -- ROTEADOR MULTI-ESTRATEGIA
 # ===================================================================
-
-def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray, static_cols: dict) -> tuple:
-    """
-    Recalcula sinais operacionais com parâmetros perturbados.
-    ADAPTAR esta função para cada estratégia se mudar a lógica base.
-    Utiliza colunas pré-computadas na main para velocidade institucional.
-    """
-    # Buscar pré-cálculos pesados para altíssima performance
-    velocidade = static_cols["velocidade"]
-    percentil  = static_cols["percentil"]
-    entropia   = static_cols["entropia"]
-    vr_pips    = static_cols["vr_pips"]
-    hurst      = df["hurst"].values
-    
-    sl_pips = params["mult_sl"] * vr_pips
-    tp_pips = params["mult_tp"] * vr_pips
-    
-    cond_hurst    = hurst > params["hurst_cutoff"]
-    cond_entropia = entropia < params["entropia_cutoff"]
-    cond_base     = cond_hurst & cond_entropia & janela_op
-    
-    sinal = np.zeros(len(df), dtype=np.int8)
-    
-    # Condições de Compra e Venda
-    cond_long  = cond_base & (percentil > params["percentil_trigger"]) & (velocidade > 0)
-    cond_short = cond_base & (percentil < (1.0 - params["percentil_trigger"])) & (velocidade < 0)
-    
-    sinal[cond_long]  =  1
-    sinal[cond_short] = -1
-    
-    return sinal, sl_pips, tp_pips
+from testes_robustez.distribuicao_parametros.distribuicao_parametros import calcular_sinais
 
 
 # ===================================================================
@@ -489,6 +459,87 @@ def gerar_grafico(resultados: list, resultado_otimo: dict, passou_tudo: bool,
 
 
 # ===================================================================
+# FUNCAO EXPORTAVEL PARA A ESTEIRA (FAIL-FAST)
+# ===================================================================
+def rodar_permutacao_na_esteira(df: pd.DataFrame, params_otimos: dict, estrategia: str, ativo: str, timeframe: str, dir_saida: Path) -> dict:
+    horas = df.index.strftime("%H:%M")
+    janela_op = (horas >= HORA_INICIO_OP) & (horas <= HORA_FIM_OP)
+    
+    # Pre-calculos
+    closes = df["Close"].values
+    log_ret = df["log_return"].values
+    velocidade = df["Close"].diff(1).values
+    aceleracao = pd.Series(velocidade).diff(1).values
+    
+    def _percentrank(arr):
+        val = arr[-1]
+        hist = arr[:-1]
+        if len(hist) == 0: return 0.5
+        return float(np.sum(hist < val)) / len(hist)
+        
+    percentil = pd.Series(aceleracao).rolling(100, min_periods=100).apply(_percentrank, raw=True).values
+    
+    def _entropia(arr):
+        if np.std(arr) < 1e-15: return 0.0
+        c, _ = np.histogram(arr, bins=10)
+        p = c / len(arr)
+        p = p[p > 0]
+        return float(np.clip(-np.sum(p * np.log2(p)) / np.log2(10), 0, 1))
+        
+    entropia = pd.Series(log_ret).rolling(30, min_periods=30).apply(_entropia, raw=True).values
+    
+    vr = pd.Series(log_ret).rolling(50, min_periods=50).std(ddof=1).values
+    vr_pips = vr * closes * FATOR_PIPS
+    
+    static_cols = {
+        "velocidade": velocidade, "percentil": percentil,
+        "entropia": entropia, "vr_pips": vr_pips
+    }
+    
+    sinal_ref, sl_ref, tp_ref = calcular_sinais(df, params_otimos, janela_op, estrategia, cache=static_cols)
+    resultado_otimo = rodar_backtest(df, sinal_ref, sl_ref, tp_ref)
+    
+    combinacoes = gerar_combinacoes_aleatorias(params_otimos, N_COMBINACOES, PERTURBACAO_PCT, SEED)
+    resultados = []
+    
+    for params in combinacoes:
+        sinal, sl, tp = calcular_sinais(df, params, janela_op, estrategia, cache=static_cols)
+        res = rodar_backtest(df, sinal, sl, tp)
+        registro = params.copy()
+        registro.update(res)
+        resultados.append(registro)
+        
+    pnls = [r["pnl_pct"] for r in resultados]
+    frs  = [r["fr"] for r in resultados]
+    fls  = [r["fator_lucro"] for r in resultados]
+    
+    n_lucrativas = sum(1 for p in pnls if p > 0.0)
+    pct_lucrativas = n_lucrativas / N_COMBINACOES
+    passou_c1 = pct_lucrativas >= CRITERIO_1_PCT_LUCRATIVAS
+    pnl_mediano = float(np.median(pnls))
+    passou_c2 = pnl_mediano > CRITERIO_2_PNL_MEDIANO
+    fr_mediano = float(np.median(frs))
+    passou_c3 = fr_mediano >= CRITERIO_3_FR_MEDIANO
+    fl_mediano = float(np.median(fls))
+    passou_c4 = fl_mediano >= CRITERIO_4_FL_MEDIANO
+    
+    pnl_media = float(np.mean(pnls))
+    pnl_std   = float(np.std(pnls))
+    pnl_otimo = float(resultado_otimo["pnl_pct"])
+    limite_outlier = pnl_media + CRITERIO_5_OUTLIER_SIGMA * pnl_std
+    passou_c5 = pnl_otimo < limite_outlier
+    
+    passou_tudo = passou_c1 and passou_c2 and passou_c3 and passou_c4 and passou_c5
+    
+    criterios_status = {"c1": passou_c1, "c2": passou_c2, "c3": passou_c3, "c4": passou_c4, "c5": passou_c5}
+    medians = {"pct_lucrativas": pct_lucrativas, "pnl": pnl_mediano, "fr": fr_mediano, "fl": fl_mediano}
+    
+    gerar_grafico(resultados, resultado_otimo, passou_tudo, criterios_status, medians, dir_saida)
+    
+    return {"aprovado": passou_tudo}
+
+
+# ===================================================================
 # MAIN -- ORQUESTRADOR DO PIPELINE
 # ===================================================================
 
@@ -594,7 +645,7 @@ def main():
     # REF: BACKTEST DA PARAMETRIZAÇÃO ÓTIMA (REFERÊNCIA)
     # =================================================================
     print("[REF] Rodando backtest com parametros otimos (referencia)...")
-    sinal_ref, sl_ref, tp_ref = calcular_sinais(df, PARAMS_OTIMOS, janela_op, static_cols)
+    sinal_ref, sl_ref, tp_ref = calcular_sinais(df, PARAMS_OTIMOS, janela_op, ESTRATEGIA, cache=static_cols)
     resultado_otimo = rodar_backtest(df, sinal_ref, sl_ref, tp_ref)
     
     print(f"   PnL: {resultado_otimo['pnl_pct']:+.1f}% | FR: {resultado_otimo['fr']:.2f}x | "
@@ -611,7 +662,7 @@ def main():
     for idx, params in enumerate(tqdm(combinacoes, desc=f"  Permutacao {ESTRATEGIA} | {ATIVO} {TIMEFRAME}", 
                                       ncols=70, unit="comb")):
         # Rodar sinais com o set perturbado (rápido devido a static_cols pré-calculado)
-        sinal, sl, tp = calcular_sinais(df, params, janela_op, static_cols)
+        sinal, sl, tp = calcular_sinais(df, params, janela_op, ESTRATEGIA, cache=static_cols)
         
         # Rodar backtest candle-a-candle
         res = rodar_backtest(df, sinal, sl, tp)
@@ -722,16 +773,16 @@ def main():
     # 1. Gráfico PNG
     gerar_grafico(resultados, resultado_otimo, passou_tudo, criterios_status, medians, DIR_SAIDA)
     
-    # 2. CSV Completo
-    linhas_csv = []
-    for i, r in enumerate(resultados):
-        linha = {"combinacao_id": i + 1, "seed": SEED}
-        linha.update(r)
-        linhas_csv.append(linha)
-    df_csv = pd.DataFrame(linhas_csv)
-    caminho_csv = DIR_SAIDA / f"permutacao_{ESTRATEGIA.lower()}.csv"
-    df_csv.to_csv(caminho_csv, index=False)
-    print(f"[CSV] Salvo em: {caminho_csv}")
+    # 2. CSV Completo (DESABILITADO POR PADRAO)
+    # linhas_csv = []
+    # for i, r in enumerate(resultados):
+    #     linha = {"combinacao_id": i + 1, "seed": SEED}
+    #     linha.update(r)
+    #     linhas_csv.append(linha)
+    # df_csv = pd.DataFrame(linhas_csv)
+    # caminho_csv = DIR_SAIDA / f"permutacao_{ESTRATEGIA.lower()}.csv"
+    # df_csv.to_csv(caminho_csv, index=False)
+    # print(f"[CSV] Salvo em: {caminho_csv}")
     
     # 3. Arquivo de resumo TXT
     caminho_txt = DIR_SAIDA / f"permutacao_{ESTRATEGIA.lower()}_resumo.txt"

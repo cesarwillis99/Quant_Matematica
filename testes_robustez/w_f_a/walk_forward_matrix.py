@@ -690,6 +690,41 @@ def gerar_dashboard(matriz: list, cluster: dict, passou: bool, dir_saida: Path):
 
 
 # ===================================================================
+# FUNCAO EXPORTAVEL PARA A ESTEIRA (FAIL-FAST)
+# ===================================================================
+def rodar_wfm_na_esteira(df: pd.DataFrame, df_comb: pd.DataFrame, estrategia: str, ativo: str, timeframe: str, dir_saida: Path) -> dict:
+    horas = df.index.strftime("%H:%M")
+    janela_op = (horas >= HORA_INICIO_OP) & (horas <= HORA_FIM_OP)
+    n_total = len(df)
+    
+    static_cols = precomputar_indicadores(df)
+    
+    matriz_resultados = []
+    n_celulas = len(OOS_PCTS) * len(WF_RUNS)
+    
+    for i, oos_pct in enumerate(OOS_PCTS):
+        for j, n_runs in enumerate(WF_RUNS):
+            fatias = gerar_fatias_wf(n_total, n_runs, oos_pct)
+            celula = avaliar_celula(df, df_comb, fatias, static_cols, janela_op)
+            
+            matriz_resultados.append({
+                "oos_pct": oos_pct, "n_runs": n_runs,
+                "oos_idx": i, "run_idx": j,
+                "celula":  celula,
+            })
+            
+    mat_ap = np.zeros((len(OOS_PCTS), len(WF_RUNS)), dtype=bool)
+    for res in matriz_resultados:
+        mat_ap[res["oos_idx"], res["run_idx"]] = res["celula"]["aprovada"]
+    cluster = analisar_cluster(mat_ap)
+    passou = cluster["passou"]
+    
+    gerar_dashboard(matriz_resultados, cluster, passou, dir_saida)
+    
+    return {"aprovado": passou, "cluster": cluster}
+
+
+# ===================================================================
 # MAIN -- ORQUESTRADOR DO PIPELINE WFM
 # ===================================================================
 

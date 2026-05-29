@@ -73,219 +73,12 @@ def calcular_hurst_janela(retornos: np.ndarray) -> float:
     if len(log_n) < 2: return np.nan
     h = _quick_ols_slope(np.array(log_n), np.array(log_rs))
     if np.isnan(h) or h < 0.0 or h > 1.5: return np.nan
-    return h
-
-
-# ===================================================================
+    return # ===================================================================
 #  PARTE 2 -- ROTEADOR MULTI-ESTRATEGIA (BASEADO NO DISTRIBUICAO)
 # ===================================================================
-def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
-                    estrategia: str, dir_data: Path, cache: dict) -> tuple:
-    """
-    Roteador genérico que gera sinais e limites dinâmicos de SL/TP
-    com base na estratégia selecionada e nas chaves de parâmetros ótimos.
-    """
-    closes = df["Close"].values
-    n = len(closes)
+from testes_robustez.distribuicao_parametros.distribuicao_parametros import calcular_sinais
 
-    if "log_return" not in df.columns:
-        df["log_return"] = np.log(closes / np.roll(closes, 1))
-        df["log_return"].iloc[0] = 0.0
-
-    log_ret = df["log_return"].values
-
-    # Categoria padrão de VR
-    if "vr_pips" not in cache:
-        vr = pd.Series(log_ret).rolling(50, min_periods=50).std(ddof=1).values
-        cache["vr_pips"] = vr * closes * FATOR_PIPS
-    vr_pips = cache["vr_pips"]
-
-    sl_pips = params["mult_sl"] * vr_pips
-    tp_pips = params["mult_tp"] * vr_pips
-
-    sinal = np.zeros(n, dtype=np.int8)
-
-    # 1. MOMENTUM
-    if estrategia == "MOMENTUM":
-        if "velocidade" not in cache:
-            cache["velocidade"] = df["Close"].diff(1).values
-            acel = pd.Series(cache["velocidade"]).diff(1)
-
-            def _percentrank(arr):
-                val = arr[-1]
-                hist = arr[:-1]
-                if len(hist) == 0: return 0.5
-                return float(np.sum(hist < val)) / len(hist)
-
-            cache["percentil"] = acel.rolling(100, min_periods=100).apply(
-                _percentrank, raw=True).values
-
-            def _entropia(arr):
-                if np.std(arr) < 1e-15: return 0.0
-                c, _ = np.histogram(arr, bins=10)
-                p = c / len(arr)
-                p = p[p > 0]
-                return float(np.clip(-np.sum(p * np.log2(p)) / np.log2(10), 0, 1))
-
-            cache["entropia"] = df["log_return"].rolling(30, min_periods=30).apply(
-                _entropia, raw=True).values
-
-        if "hurst" not in df.columns:
-            print("[HURST] Calculando série de Hurst OOS...")
-            hurst_v = np.full(n, np.nan, dtype=np.float32)
-            for i in range(99, n):
-                hurst_v[i] = calcular_hurst_janela(log_ret[i-99:i+1])
-            df["hurst"] = hurst_v
-
-        vel = cache["velocidade"]
-        pct = cache["percentil"]
-        ent = cache["entropia"]
-        hurst = df["hurst"].values
-
-        cond_hurst = hurst > params["hurst_cutoff"]
-        cond_ent   = ent < params["entropia_cutoff"]
-        cond_base  = cond_hurst & cond_ent & janela_op
-
-        cond_long  = cond_base & (pct > params["percentil_trigger"]) & (vel > 0)
-        cond_short = cond_base & (pct < (1 - params["percentil_trigger"])) & (vel < 0)
-        sinal[cond_long]  =  1
-        sinal[cond_short] = -1
-
-    # 2. ZSCORE
-    elif estrategia == "ZSCORE":
-        j_z = int(params["janela_zscore"])
-        j_v = int(params["janela_vol"])
-        z_e = params["z_entry"]
-        h_cut = params["hurst_cut"]
-
-        cache_key_z = f"zscore_{j_z}"
-        if cache_key_z not in cache:
-            s_close = pd.Series(closes)
-            roll_mean = s_close.rolling(j_z).mean().values
-            roll_std = s_close.rolling(j_z).std(ddof=1).values
-            roll_std = np.where(roll_std == 0, 1e-9, roll_std)
-            cache[cache_key_z] = (closes - roll_mean) / roll_std
-
-        z_array = cache[cache_key_z]
-        if "hurst" not in df.columns:
-            hurst_v = np.full(n, np.nan, dtype=np.float32)
-            for i in range(99, n):
-                hurst_v[i] = calcular_hurst_janela(log_ret[i-99:i+1])
-            df["hurst"] = hurst_v
-        hurst = df["hurst"].values
-
-        z_prev = np.concatenate(([0], z_array[:-1]))
-        cond_base = janela_op & (hurst < h_cut)
-        cond_long  = cond_base & (z_prev <= -z_e) & (z_array > -z_e)
-        cond_short = cond_base & (z_prev >= z_e) & (z_array < z_e)
-        sinal[cond_long]  =  1
-        sinal[cond_short] = -1
-
-        cache_key_v = f"vr_{j_v}"
-        if cache_key_v not in cache:
-            vr_v = pd.Series(log_ret).rolling(j_v, min_periods=j_v).std(ddof=1).values
-            cache[cache_key_v] = vr_v * closes * FATOR_PIPS
-        vr_pips_v = cache[cache_key_v]
-        sl_pips = params["mult_sl"] * vr_pips_v
-        tp_pips = params["mult_tp"] * vr_pips_v
-
-    # 3. HAWKES
-    elif estrategia == "HAWKES":
-        if "hawkes_lambda_norm" not in cache:
-            ret_abs = np.abs(df["log_return"].fillna(0).values)
-            kappa = 0.1
-            intensity = np.zeros(n)
-            for i in range(1, n):
-                intensity[i] = intensity[i-1] * np.exp(-kappa) + ret_abs[i-1]
-            df["hawkes_intensity"] = intensity
-            
-            roll_mean = df["hawkes_intensity"].rolling(100).mean()
-            roll_std = df["hawkes_intensity"].rolling(100).std()
-            df["hawkes_zscore"] = (df["hawkes_intensity"] - roll_mean) / np.where(roll_std == 0, 1e-9, roll_std)
-            
-            cache["hawkes_lambda_norm"] = df["hawkes_zscore"].values
-
-        lambda_norm = cache["hawkes_lambda_norm"]
-        lam_prev = np.roll(lambda_norm, 1)
-        lam_prev[0] = np.nan
-        norm_falling = lambda_norm < lam_prev
-        
-        limit_z = params.get("lambda_norm_min_sinal", 1.5)
-        cond_base = janela_op & (lambda_norm > limit_z) & norm_falling
-        
-        ret_suave = pd.Series(log_ret).rolling(10).mean().values
-        sinal[cond_base & (ret_suave > 0)] =  1
-        sinal[cond_base & (ret_suave < 0)] = -1
-
-    # 4. OU (Ornstein-Uhlenbeck)
-    elif estrategia == "OU":
-        j_ou = int(params["janela_ou"])
-        cache_key = f"ou_{j_ou}"
-        if cache_key not in cache:
-            from otimizacoes.otimizacao_ou import calcular_ou_rolling
-            z, hl, val = calcular_ou_rolling(df, j_ou)
-            cache[cache_key] = (z, hl, val)
-
-        z, hl, val = cache[cache_key]
-        cond_op = val & (hl >= 1.0) & (hl <= params["halflife_max"]) & janela_op
-        sinal[cond_op & (z <= -params["zscore_threshold"])] =  1
-        sinal[cond_op & (z >= params["zscore_threshold"])] = -1
-
-    # 5. OU_REVERSO
-    elif estrategia == "OU_REVERSO":
-        j_ou = int(params["janela_ou"])
-        cache_key = f"ou_{j_ou}"
-        if cache_key not in cache:
-            from otimizacoes.otimizacao_ou import calcular_ou_rolling
-            z, hl, val = calcular_ou_rolling(df, j_ou)
-            cache[cache_key] = (z, hl, val)
-
-        z, hl, val = cache[cache_key]
-        cond_op = val & (hl >= 1.0) & (hl <= params["halflife_max"]) & janela_op
-        sinal[cond_op & (z >= params["zscore_threshold"])] =  1
-        sinal[cond_op & (z <= -params["zscore_threshold"])] = -1
-
-    # 6. PCA
-    elif estrategia == "PCA":
-        j_p = int(params["janela_pca"])
-        j_z = int(params["janela_zscore"])
-        d_min = params["dominancia_minima"]
-        z_t = params["zscore_threshold"]
-
-        cache_key = f"pca_{j_p}_{j_z}"
-        if cache_key not in cache:
-            from otimizacoes.otimizacao_pca import calcular_pca_rolling
-            z, dom, val = calcular_pca_rolling(df, j_p, j_z)
-            cache[cache_key] = (z, dom, val)
-
-        z, dom, val = cache[cache_key]
-        cond_op = val & (dom >= d_min) & janela_op
-        sinal[cond_op & (z <= -z_t)] =  1
-        sinal[cond_op & (z >= z_t)] = -1
-
-    # 7. WAVELET
-    elif estrategia == "WAVELET":
-        co_cut = params["coerencia_cutoff"]
-        eq_qt  = params["energia_quantile"]
-        pot_s1 = params["pot_s1_cutoff"]
-
-        cache_key = "wavelet"
-        if cache_key not in cache:
-            from otimizacoes.otimizacao_wavelet import calcular_wavelet_rolling
-            sig_wav, val = calcular_wavelet_rolling(df, co_cut, eq_qt, pot_s1)
-            cache[cache_key] = (sig_wav, val)
-
-        sig_wav, val = cache[cache_key]
-        sinal[val & (sig_wav == 1) & janela_op] =  1
-        sinal[val & (sig_wav == -1) & janela_op] = -1
-
-    else:
-        raise ValueError(f"Estratégia {estrategia} não reconhecida.")
-
-    return sinal, sl_pips, tp_pips
-
-
-# ===================================================================
+# =================================================================================
 # PARTE 3 -- MOTOR DE BACKTEST CANDLE-A-CANDLE INSTITUCIONAL
 # ===================================================================
 def simular_backtest_candle_a_candle(df: pd.DataFrame,
@@ -437,19 +230,16 @@ def calcular_metricas(equity_curve: pd.Series, trades: list) -> dict:
 # ===================================================================
 # PARTE 5 -- RENDERIZADOR DE IMAGENS E DADOS (DARK MODE PREMIUM)
 # ===================================================================
-def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series,
-                              trades: list, estrategia: str, ativo: str,
-                              timeframe: str, tipo_oos: str, sufixo_ano: str,
-                              dir_saida: Path):
+def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series, trades: list,
+                               estrategia: str, ativo: str, timeframe: str, tipo_oos: str, sufixo_ano: str, dir_saida: Path, param_id: str = "") -> None:
     
     # 1. Salvar CSV Operações (Será usado em Spread e What If)
-    csv_path = dir_saida / f"operacoes_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}.csv"
-    if trades:
-        pd.DataFrame(trades).to_csv(csv_path, index=False)
-        print(f"[CSV] Operações OOS salvas em: {csv_path}")
-    else:
-        pd.DataFrame(columns=["data_entrada","data_saida","direcao","preco_entrada","preco_saida","lot_size","pnl_monetario","motivo"]).to_csv(csv_path, index=False)
-        print(f"[AVISO] Nenhum trade executado no OOS. CSV vazio salvo em: {csv_path}")
+    # csv_path = dir_saida / f"operacoes_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}_{param_id}.csv"
+    # if trades:
+    #     pd.DataFrame(trades).to_csv(csv_path, index=False)
+    # else:
+    #     pd.DataFrame(columns=["data_entrada","data_saida","direcao","preco_entrada","preco_saida","lot_size","pnl_monetario","motivo"]).to_csv(csv_path, index=False)
+    # print(f"[CSV] Operações OOS salvas em: {csv_path}")
 
     # Configuração visual Matplotlib Dark Premium
     plt.rcParams.update({
@@ -483,7 +273,7 @@ def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series,
     ax2.set_xlabel("Data", fontsize=10)
     ax2.grid(True)
     
-    img_eq_path = dir_saida / f"equity_curve_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}.png"
+    img_eq_path = dir_saida / f"equity_curve_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}_{param_id}.png"
     plt.tight_layout()
     plt.savefig(img_eq_path, dpi=150, bbox_inches="tight")
     plt.close()
@@ -521,10 +311,28 @@ def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series,
             cell.set_text_props(color='#E6EDF3')
             cell.set_facecolor('#0D1117' if row % 2 == 0 else '#161B22')
             
-    img_tbl_path = dir_saida / f"tabela_metricas_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}.png"
+    img_tbl_path = dir_saida / f"tabela_metricas_OOS_{tipo_oos.upper()}_{ativo.upper()}_{estrategia.upper()}_{param_id}.png"
     plt.savefig(img_tbl_path, dpi=150, bbox_inches='tight', facecolor='#0D1117')
     plt.close()
     print(f"[TABELA] Tabela de métricas salva em: {img_tbl_path}")
+
+
+# ===================================================================
+# FUNCAO EXPORTAVEL PARA A ESTEIRA (FAIL-FAST)
+# ===================================================================
+def rodar_oos_na_esteira(df_oos: pd.DataFrame, params_otimos: dict, estrategia: str, ativo: str, timeframe: str, tipo_oos: str, sufixo_ano: str, dir_saida: Path, param_id: str = "") -> dict:
+    horas = df_oos.index.strftime("%H:%M")
+    janela_op = (df_oos.index.weekday >= 0) & (df_oos.index.weekday <= 4) & (horas >= HORA_INICIO_OP) & (horas <= HORA_FIM_OP)
+    
+    cache = {}
+    sinal, sl_pips, tp_pips = calcular_sinais(df_oos, params_otimos, janela_op, estrategia, cache)
+    equity_curve, trades = simular_backtest_candle_a_candle(df_oos, sinal, sl_pips, tp_pips)
+    metricas = calcular_metricas(equity_curve, trades)
+    
+    gerar_relatorio_e_graficos(metricas, equity_curve, trades, estrategia, ativo, timeframe, tipo_oos, sufixo_ano, dir_saida, param_id)
+    
+    aprovado = (metricas["pnl_pct"] > 0) and (metricas["fator_lucro"] >= 1.0)
+    return {"aprovado": aprovado, "metricas": metricas}
 
 
 # ===================================================================
@@ -624,7 +432,7 @@ def main():
     # Recalcular Sinais OOS
     print(f"[SINAIS] Calculando sinais vetorizados para {estrategia}...")
     cache = {}
-    sinal, sl_pips, tp_pips = calcular_sinais(df_comp, params_otimos, janela_op, estrategia, dir_data, cache)
+    sinal, sl_pips, tp_pips = calcular_sinais(df_comp, params_otimos, janela_op, estrategia, cache)
 
     # Simular backtest candle-a-candle
     print("[BACKTEST] Rodando simulação candle-a-candle institucional no OOS...")

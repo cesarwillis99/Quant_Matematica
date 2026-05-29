@@ -560,6 +560,119 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         vr_w = cache["wav_vr_pips"]
         return sinal_w, params["mult_sl"] * vr_w, params["mult_tp"] * vr_w
 
+    # =================================================================
+    # CURVATURA (Frenet-Serret)
+    # =================================================================
+    elif estrategia == "CURVATURA":
+        j_n = int(params["janela_norm"])
+        j_v = int(params["janela_vol"])
+        
+        # 1. Calcular Derivadas Base (Uma vez no cache)
+        if "curv_T" not in cache:
+            C = closes
+            n_c = len(C)
+            R = np.log(C / np.roll(C, 1))
+            R[0] = 0.0
+            
+            T_x = np.ones(n_c, dtype=np.float32)
+            T_y = np.zeros(n_c, dtype=np.float32)
+            T_z = np.zeros(n_c, dtype=np.float32)
+            
+            A_x = np.zeros(n_c, dtype=np.float32)
+            A_y = np.zeros(n_c, dtype=np.float32)
+            A_z = np.zeros(n_c, dtype=np.float32)
+            
+            T_y[1:] = C[1:] - C[:-1]
+            T_z[1:] = R[1:] - R[:-1]
+            
+            A_y[2:] = C[2:] - 2*C[1:-1] + C[:-2]
+            A_z[2:] = R[2:] - 2*R[1:-1] + R[:-2]
+            
+            T = np.column_stack((T_x, T_y, T_z))
+            A = np.column_stack((A_x, A_y, A_z))
+            
+            norm_T = np.linalg.norm(T, axis=1)
+            T_hat = T / norm_T[:, np.newaxis]
+            
+            TxA = np.cross(T, A)
+            norm_TxA = np.linalg.norm(TxA, axis=1)
+            kappa = norm_TxA / (norm_T ** 3)
+            
+            dT_hat = np.zeros_like(T_hat)
+            dT_hat[1:] = T_hat[1:] - T_hat[:-1]
+            norm_dT_hat = np.linalg.norm(dT_hat, axis=1)
+            mask_zero = norm_dT_hat == 0
+            norm_dT_hat[mask_zero] = 1e-9
+            
+            N = dT_hat / norm_dT_hat[:, np.newaxis]
+            B = np.cross(T, N)
+            dB = np.zeros_like(B)
+            dB[1:] = B[1:] - B[:-1]
+            tau = -np.sum(N * dB, axis=1)
+            
+            sma50 = pd.Series(C).rolling(50, min_periods=1).mean().values
+            
+            cache["curv_kappa"] = kappa
+            cache["curv_tau"] = tau
+            cache["curv_A_y"] = A_y
+            cache["curv_sma50"] = sma50
+            cache["curv_R"] = R
+            cache["curv_C"] = C
+            
+        kappa = cache["curv_kappa"]
+        tau = cache["curv_tau"]
+        A_y = cache["curv_A_y"]
+        sma50 = cache["curv_sma50"]
+        
+        # 2. Normalização Z-Score Baseada na Janela (Parametrizada)
+        cache_key_norm = f"curv_norm_{j_n}"
+        if cache_key_norm not in cache:
+            k_roll = pd.Series(kappa).rolling(j_n, min_periods=1)
+            k_mean = k_roll.mean().values
+            k_std = k_roll.std().replace(0, 1e-9).fillna(1e-9).values
+            kappa_norm = (kappa - k_mean) / k_std
+            
+            t_roll = pd.Series(tau).rolling(j_n, min_periods=1)
+            t_mean = t_roll.mean().values
+            t_std = t_roll.std().replace(0, 1e-9).fillna(1e-9).values
+            tau_norm = (tau - t_mean) / t_std
+            
+            cache[cache_key_norm] = (kappa_norm, tau_norm)
+            
+        kappa_norm, tau_norm = cache[cache_key_norm]
+        
+        # 3. Picos Geométricos
+        kn_t1 = np.concatenate(([0], kappa_norm[:-1])); kn_t1[0] = 0
+        kn_t2 = np.concatenate(([0, 0], kappa_norm[:-2])); kn_t2[0] = 0; kn_t2[1] = 0
+        pico_mask = (kn_t1 > kn_t2) & (kn_t1 > kappa_norm) & (kn_t1 > 2.0)
+        
+        A_y_t1 = np.concatenate(([0], A_y[:-1])); A_y_t1[0] = 0
+        direcao = np.zeros(n, dtype=np.int8)
+        direcao[pico_mask & (A_y_t1 > 0)] = 1
+        direcao[pico_mask & (A_y_t1 < 0)] = -1
+        
+        # 4. Volatilidade Baseada na Janela (Parametrizada)
+        cache_key_v = f"curv_vr_{j_v}"
+        if cache_key_v not in cache:
+            vr = pd.Series(cache["curv_R"]).rolling(window=j_v, min_periods=j_v).std(ddof=1).values
+            cache[cache_key_v] = vr * cache["curv_C"] * FATOR_PIPS
+            
+        vr_pips_v = cache[cache_key_v]
+        sl_pips = params["mult_sl"] * vr_pips_v
+        tp_pips = params["mult_tp"] * vr_pips_v
+        
+        # 5. Condições Finais de Sinal
+        tau_norm_t1 = np.concatenate(([0], tau_norm[:-1])); tau_norm_t1[0] = 0
+        cond_comum = janela_op & pico_mask
+        cond_buy  = cond_comum & (direcao == 1) & (tau_norm_t1 > 0) & (cache["curv_C"] < sma50)
+        cond_sell = cond_comum & (direcao == -1) & (tau_norm_t1 < 0) & (cache["curv_C"] > sma50)
+        
+        sinal = np.zeros(n, dtype=np.int8)
+        sinal[cond_buy]  =  1
+        sinal[cond_sell] = -1
+        
+        return sinal, sl_pips, tp_pips
+        
     else:
         raise ValueError(f"Estrategia '{estrategia}' nao suportada.")
 

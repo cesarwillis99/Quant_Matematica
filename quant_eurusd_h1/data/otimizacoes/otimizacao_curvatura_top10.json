@@ -1,0 +1,122 @@
+[
+    {
+        "janela_norm": 50,
+        "janela_vol": 20,
+        "mult_sl": 1.5,
+        "mult_tp": 4.0,
+        "Trades": 388,
+        "Lucro_Total_Pips": -9.4,
+        "Max_DD_Pips": 699.4,
+        "Ret_DD": -0.01,
+        "Profit_Factor": 1.0,
+        "id": "CURVATURA_TOP1"
+    },
+    {
+        "janela_norm": 50,
+        "janela_vol": 30,
+        "mult_sl": 1.5,
+        "mult_tp": 4.0,
+        "Trades": 391,
+        "Lucro_Total_Pips": -116.6,
+        "Max_DD_Pips": 565.6,
+        "Ret_DD": -0.21,
+        "Profit_Factor": 0.98,
+        "id": "CURVATURA_TOP2"
+    },
+    {
+        "janela_norm": 80,
+        "janela_vol": 30,
+        "mult_sl": 2.5,
+        "mult_tp": 4.0,
+        "Trades": 356,
+        "Lucro_Total_Pips": -229.6,
+        "Max_DD_Pips": 1038.0,
+        "Ret_DD": -0.22,
+        "Profit_Factor": 0.96,
+        "id": "CURVATURA_TOP3"
+    },
+    {
+        "janela_norm": 80,
+        "janela_vol": 20,
+        "mult_sl": 1.5,
+        "mult_tp": 4.0,
+        "Trades": 369,
+        "Lucro_Total_Pips": -213.8,
+        "Max_DD_Pips": 946.1,
+        "Ret_DD": -0.23,
+        "Profit_Factor": 0.96,
+        "id": "CURVATURA_TOP4"
+    },
+    {
+        "janela_norm": 50,
+        "janela_vol": 30,
+        "mult_sl": 1.5,
+        "mult_tp": 2.0,
+        "Trades": 397,
+        "Lucro_Total_Pips": -181.9,
+        "Max_DD_Pips": 687.7,
+        "Ret_DD": -0.26,
+        "Profit_Factor": 0.95,
+        "id": "CURVATURA_TOP5"
+    },
+    {
+        "janela_norm": 80,
+        "janela_vol": 30,
+        "mult_sl": 2.0,
+        "mult_tp": 4.0,
+        "Trades": 364,
+        "Lucro_Total_Pips": -297.3,
+        "Max_DD_Pips": 1014.1,
+        "Ret_DD": -0.29,
+        "Profit_Factor": 0.95,
+        "id": "CURVATURA_TOP6"
+    },
+    {
+        "janela_norm": 80,
+        "janela_vol": 80,
+        "mult_sl": 1.5,
+        "mult_tp": 4.0,
+        "Trades": 369,
+        "Lucro_Total_Pips": -291.7,
+        "Max_DD_Pips": 872.7,
+        "Ret_DD": -0.33,
+        "Profit_Factor": 0.93,
+        "id": "CURVATURA_TOP7"
+    },
+    {
+        "janela_norm": 50,
+        "janela_vol": 50,
+        "mult_sl": 1.5,
+        "mult_tp": 4.0,
+        "Trades": 392,
+        "Lucro_Total_Pips": -184.8,
+        "Max_DD_Pips": 538.2,
+        "Ret_DD": -0.34,
+        "Profit_Factor": 0.96,
+        "id": "CURVATURA_TOP8"
+    },
+    {
+        "janela_norm": 100,
+        "janela_vol": 30,
+        "mult_sl": 2.5,
+        "mult_tp": 4.0,
+        "Trades": 351,
+        "Lucro_Total_Pips": -391.5,
+        "Max_DD_Pips": 1114.8,
+        "Ret_DD": -0.35,
+        "Profit_Factor": 0.94,
+        "id": "CURVATURA_TOP9"
+    },
+    {
+        "janela_norm": 50,
+        "janela_vol": 80,
+        "mult_sl": 1.5,
+        "mult_tp": 4.0,
+        "Trades": 392,
+        "Lucro_Total_Pips": -236.2,
+        "Max_DD_Pips": 670.2,
+        "Ret_DD": -0.35,
+        "Profit_Factor": 0.95,
+        "id": "CURVATURA_TOP10"
+    }
+]
