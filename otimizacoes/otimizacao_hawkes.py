@@ -16,12 +16,21 @@ warnings.filterwarnings("ignore")
 # =============================================================================
 # CONSTANTES E CAMINHOS
 # =============================================================================
-DIR_PROJETO = Path(r"c:\Users\cesar\.gemini\antigravity\scratch\Quant_Matematica.Trade")
-DIR_DATA    = DIR_PROJETO / "quant_eurusd" / "data"
+DIR_PROJETO = Path(__file__).resolve().parent.parent
+
+parser = argparse.ArgumentParser(description="Otimizador Hawkes Grid Search")
+parser.add_argument("--ativo", type=str, default="eurusd")
+parser.add_argument("--timeframe", type=str, default="h1")
+args = parser.parse_args()
+
+ativo = args.ativo.lower()
+timeframe = args.timeframe.lower()
+
+DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
 DIR_SAIDA   = DIR_DATA / "otimizacoes"
 
-PARQUET_COMPLETO    = DIR_DATA / "eurusd_h1_completo.parquet"
-PARQUET_OPERACIONAL = DIR_DATA / "eurusd_h1_operacional.parquet"
+PARQUET_COMPLETO    = DIR_DATA / f"{ativo}_{timeframe}_completo.parquet"
+PARQUET_OPERACIONAL = DIR_DATA / f"{ativo}_{timeframe}_operacional.parquet"
 ARQUIVO_SAIDA       = DIR_SAIDA / "otimizacao_hawkes_resultados.parquet"
 
 # =============================================================================
@@ -289,11 +298,32 @@ def main():
         df_res = pd.DataFrame(resultados)
         df_res = df_res.sort_values(by="Ret_DD", ascending=False).reset_index(drop=True)
         df_res.to_parquet(ARQUIVO_SAIDA)
+        
+        # Salvar as Top 10 em JSON no formato exigido pela esteira
+        top10_list = []
+        for i, row in df_res.head(10).iterrows():
+            top10_list.append({
+                "id": f"HAWKES_TOP{i+1}",
+                "excitacao_maxima": float(row["excitacao_maxima"]),
+                "lambda_norm_min_sinal": float(row["lambda_norm_min_sinal"]),
+                "mult_sl": float(row["mult_sl"]),
+                "mult_tp": float(row["mult_tp"]),
+                "Trades": int(row["Trades"]),
+                "Lucro_Total_Pips": float(row["Lucro_Total_Pips"]),
+                "Max_DD_Pips": float(row["Max_DD_Pips"]),
+                "Ret_DD": float(row["Ret_DD"])
+            })
+            
+        json_saida = DIR_SAIDA / "otimizacao_hawkes_top10.json"
+        with open(json_saida, 'w') as f:
+            json.dump(top10_list, f, indent=4)
+            
         print("\n================================================================================")
         print("TOP 10 PARAMETRIZAÇÕES HAWKES (RANKING POR RET/DD > 60 Trades):")
         print("================================================================================")
         print(df_res.head(10).to_string())
         print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
+        print(f"Top 10 JSON salvo em: {json_saida}")
     else:
         print("Nenhuma combinação atingiu os critérios mínimos (60 trades).")
 

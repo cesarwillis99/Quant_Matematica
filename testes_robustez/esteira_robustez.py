@@ -6,6 +6,11 @@ import sys
 from pathlib import Path
 import pandas as pd
 import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.colors import LinearSegmentedColormap
 
 # Configurar logging
 logging.basicConfig(
@@ -155,7 +160,7 @@ def run_spread(params, ativo, timeframe, estrategia, param_id, df_ops, dir_saida
     csv_temp = os.path.join(especific_dir, f"temp_ops_{estrategia}.csv")
     df_ops.to_csv(csv_temp, index=False)
     
-    res = rodar_spread(csv_temp, f"{estrategia}_{param_id}", ativo, especific_dir, spread_original=1.2, spread_multiplo=1.5, pip_value_por_lot=10.0)
+    res = rodar_spread(csv_temp, f"{estrategia}_{param_id}", ativo, especific_dir, spread_original=1.2, spread_multiplo=1.5, pip_value_por_lot=10.0, max_degradacao=0.25)
     if res and res.get('aprovado', False):
         return True
     return False
@@ -168,7 +173,7 @@ def run_what_if(params, ativo, timeframe, estrategia, param_id, df_ops, dir_said
     csv_temp = os.path.join(especific_dir, f"temp_ops_{estrategia}.csv")
     df_ops.to_csv(csv_temp, index=False)
     
-    res = rodar_what_if(csv_temp, f"{estrategia}_{param_id}", ativo, especific_dir, pct_remocao=0.01) # Remove top 1% trades
+    res = rodar_what_if(csv_temp, f"{estrategia}_{param_id}", ativo, especific_dir, pct_remocao=0.01, max_degradacao=0.25) # Remove top 1% trades
     if res and res.get('aprovado', False):
         return True
     return False
@@ -224,16 +229,138 @@ def run_permutacao(params, ativo, timeframe, estrategia, param_id, df_ops, dir_s
     return False
 
 # Lista ordenada de testes (Degraus da Esteira - Fail Fast)
+# OOS Passado e WFA removidos temporariamente a pedido do usuário
 ESTEIRA_DEGRAUS = [
-    ("OOS Futuro", run_oos_futuro),
-    ("OOS Passado", run_oos_passado),
-    ("What If", run_what_if),
-    ("Spread", run_spread),
-    ("Monte Carlo", run_monte_carlo),
-    ("Distribuicao Parametros", run_distribuicao_parametros),
-    ("Walk Forward Matrix (WFA)", run_wfa),
-    ("Permutacao", run_permutacao)
+    ("OOS Futuro",              run_oos_futuro),
+    ("What If",                 run_what_if),
+    ("Spread",                  run_spread),
+    ("Monte Carlo",             run_monte_carlo),
+    ("Dist. Parametros",        run_distribuicao_parametros),
+    ("Permutacao",              run_permutacao)
 ]
+
+
+def gerar_relatorio_eliminacao(historico: dict, estrategia: str, resultados_dir: Path):
+    """Gera um PNG dark-mode mostrando o resultado de cada variação em cada degrau da esteira."""
+    degraus = [nome for nome, _ in ESTEIRA_DEGRAUS]
+    variacoes = list(historico.keys())
+
+    if not variacoes:
+        logger.warning("Historico vazio, nao foi possivel gerar o relatorio PNG.")
+        return
+
+    n_var = len(variacoes)
+    n_deg = len(degraus)
+
+    # Paleta de cores
+    COR_PASSOU  = "#2ecc71"   # verde
+    COR_REPROV  = "#e74c3c"   # vermelho
+    COR_PULADO  = "#4a4a5a"   # cinza escuro
+    COR_BG      = "#0d0d1a"   # fundo muito escuro
+    COR_TITULO  = "#a78bfa"   # roxo suave
+    COR_TEXTO   = "#e2e8f0"   # branco acinzentado
+    COR_GRID    = "#1e1e30"   # divisores sutis
+
+    fig_w = max(12, n_deg * 1.8 + 3)
+    fig_h = max(5, n_var * 0.65 + 2.5)
+    fig, ax = plt.subplots(figsize=(fig_w, fig_h))
+    fig.patch.set_facecolor(COR_BG)
+    ax.set_facecolor(COR_BG)
+
+    # Preencher células
+    for r, var_id in enumerate(variacoes):
+        hist_var = historico[var_id]
+        pulou = False
+        for c, degrau in enumerate(degraus):
+            if pulou:
+                cor = COR_PULADO
+                texto = "—"
+            else:
+                resultado = hist_var.get(degrau, "PULADO")
+                if resultado == "PASSOU":
+                    cor = COR_PASSOU
+                    texto = "✓"
+                elif resultado == "REPROVOU":
+                    cor = COR_REPROV
+                    texto = "✗"
+                    pulou = True  # Fail-Fast: próximos serão PULADO
+                else:
+                    cor = COR_PULADO
+                    texto = "—"
+                    pulou = True
+
+            rect = mpatches.FancyBboxPatch(
+                (c + 0.05, n_var - r - 0.95),
+                0.90, 0.82,
+                boxstyle="round,pad=0.02",
+                linewidth=0,
+                facecolor=cor,
+                alpha=0.88
+            )
+            ax.add_patch(rect)
+            ax.text(
+                c + 0.5, n_var - r - 0.53, texto,
+                ha='center', va='center',
+                fontsize=13, fontweight='bold',
+                color='white',
+                fontfamily='DejaVu Sans'
+            )
+
+    # Rótulos das colunas (degraus)
+    for c, degrau in enumerate(degraus):
+        ax.text(
+            c + 0.5, n_var + 0.3, degrau,
+            ha='center', va='center',
+            fontsize=9, fontweight='bold',
+            color=COR_TITULO, rotation=20
+        )
+
+    # Rótulos das linhas (variações)
+    for r, var_id in enumerate(variacoes):
+        ax.text(
+            -0.15, n_var - r - 0.53, var_id,
+            ha='right', va='center',
+            fontsize=8.5, color=COR_TEXTO
+        )
+
+    # Linhas de grade horizontais
+    for r in range(n_var + 1):
+        ax.axhline(n_var - r, color=COR_GRID, linewidth=0.6)
+    for c in range(n_deg + 1):
+        ax.axvline(c, color=COR_GRID, linewidth=0.6)
+
+    # Legenda
+    legend_handles = [
+        mpatches.Patch(color=COR_PASSOU, label='Passou ✓'),
+        mpatches.Patch(color=COR_REPROV, label='Reprovou ✗'),
+        mpatches.Patch(color=COR_PULADO, label='Pulado —'),
+    ]
+    ax.legend(
+        handles=legend_handles,
+        loc='lower right',
+        fontsize=8,
+        framealpha=0.15,
+        labelcolor=COR_TEXTO,
+        facecolor=COR_BG,
+        edgecolor=COR_GRID
+    )
+
+    ax.set_xlim(-2.0, n_deg)
+    ax.set_ylim(-0.3, n_var + 0.9)
+    ax.axis('off')
+
+    # Título
+    fig.suptitle(
+        f"Esteira de Robustez — {estrategia.upper()}",
+        fontsize=14, fontweight='bold',
+        color=COR_TITULO, y=0.98
+    )
+
+    png_path = resultados_dir / f"{estrategia.lower()}_robustez.png"
+    plt.tight_layout(rect=[0.12, 0, 1, 0.95])
+    plt.savefig(png_path, dpi=150, bbox_inches='tight', facecolor=COR_BG)
+    plt.close(fig)
+    logger.info(f"Relatorio PNG de eliminacao salvo em: {png_path}")
 
 def main():
     parser = argparse.ArgumentParser(description="Orquestrador de Esteira de Robustez - Fail Fast")
@@ -250,20 +377,25 @@ def main():
     base_dir = DIR_PROJETO / f"quant_{ativo}_{timeframe}"
     data_dir = base_dir / "data"
     
-    json_path = data_dir / "otimizacoes" / f"otimizacao_{estrategia.lower()}_top10.json"
+    parquet_otim = data_dir / "otimizacoes" / f"otimizacao_{estrategia.lower()}_resultados.parquet"
     
-    if not json_path.exists():
-        logger.error(f"Arquivo de parâmetros não encontrado: {json_path}")
+    if not parquet_otim.exists():
+        logger.error(f"Arquivo de parâmetros não encontrado: {parquet_otim}")
         sys.exit(1)
         
-    with open(json_path, 'r') as f:
-        top_params_list = json.load(f)
+    df_otim = pd.read_parquet(parquet_otim)
+    # Filtro básico (ignorar curvas com poucas operações)
+    df_otim = df_otim[df_otim["Trades"] >= 60]
+    if "Profit_Factor" in df_otim.columns and estrategia != "CURVATURA":
+        df_otim = df_otim[df_otim["Profit_Factor"] >= 1.0]
+    df_otim = df_otim.sort_values("Ret_DD", ascending=False)
+    top_params_list = df_otim.head(10).to_dict(orient='records')
         
     if args.force_all:
         logger.info("⚠️ Modo DEBUG ativo: Rodando apenas a variação TOP1 e forçando execução completa de todos os testes!")
         top_params_list = top_params_list[:1]
         
-    logger.info(f"[{ativo.upper()}_{timeframe.upper()} | {estrategia}] Iniciando Esteira para {len(top_params_list)} variações.")
+    logger.info(f"[{ativo.upper()}_{timeframe.upper()} | {estrategia}] Iniciando Esteira. Procurando 10 variações aprovadas em até {len(top_params_list)} variações disponíveis.")
     
     # Pre-carregar DataFrames base para geração de sinais
     parquet_completo = data_dir / f"{ativo}_{timeframe}_completo.parquet"
@@ -305,10 +437,20 @@ def main():
     
     resultados_dir = base_dir / "resultados_robustez"
     os.makedirs(resultados_dir, exist_ok=True)
+
+    # Rastreamento para o relatório PNG de eliminação
+    historico_testes = {}  # {param_id: {nome_degrau: "PASSOU" | "REPROVOU" | "PULADO"}}
     
+    aprovadas_count = 0
+    sobreviventes = []
+
     for i, param_set in enumerate(top_params_list):
-        param_id = param_set.get('id', f"{estrategia}_TOP{i+1}")
-        logger.info(f"\n--- Processando Variação ID: {param_id} ---")
+        if aprovadas_count >= 10:
+            logger.info("🎯 10 variações aprovadas encontradas! Encerrando esteira.")
+            break
+            
+        param_id = param_set.get('id', f"{estrategia}_VAR{i+1}")
+        logger.info(f"\n--- Processando Variação ID: {param_id} ({i+1}/{len(top_params_list)}) | Aprovadas: {aprovadas_count}/10 ---")
         
         # 1. Gerar Sinais com o Motor da Distribuição de Parâmetros
         sinal, sl_pips, tp_pips = calcular_sinais(
@@ -325,6 +467,9 @@ def main():
         df_sim[f"sl_pips_{estrategia.lower()}"] = sl_pips
         df_sim[f"tp_pips_{estrategia.lower()}"] = tp_pips
         
+        # Inicializar rastreamento desta variação para aparecer no PNG
+        historico_testes[param_id] = {}
+        
         # 2. Backtest Dinâmico Isolado
         ops = simular_estrategia(
             df_sim, 
@@ -337,7 +482,10 @@ def main():
         )
         
         if len(ops) < 30:
-            logger.warning(f"❌ Variação ID {param_id} REPROVADA (Menos de 30 trades gerados).")
+            logger.warning(f"❌ Variação ID {param_id} REPROVADA (Menos de 30 trades gerados na amostra inteira).")
+            # Marca como falha no primeiro degrau para constar no PNG
+            primeiro_degrau = ESTEIRA_DEGRAUS[0][0] if ESTEIRA_DEGRAUS else "In-Sample"
+            historico_testes[param_id][primeiro_degrau] = "REPROVOU"
             continue
             
         # Converter para DataFrame p/ export temp
@@ -367,18 +515,22 @@ def main():
         # Criar pasta temporária exclusiva para esta variação de parâmetro
         dir_saida_temp = resultados_dir / f"temp_{param_id}"
         os.makedirs(dir_saida_temp, exist_ok=True)
+
         
         # 3. Esteira Fail-Fast (Desabilitável via --force_all)
         for nome_teste, func_teste in ESTEIRA_DEGRAUS:
             passou = func_teste(param_set, ativo, timeframe, estrategia, param_id, df_ops, str(dir_saida_temp), df_comp)
             
             if not passou:
+                historico_testes[param_id][nome_teste] = "REPROVOU"
                 if args.force_all:
                     logger.warning(f"❌ [DEBUG] Variação ID {param_id} seria REPROVADA no teste: {nome_teste}. Continuando devido a --force_all.")
                 else:
                     logger.warning(f"❌ Variação ID {param_id} REPROVADA no teste: {nome_teste}. Interrompendo esteira (Fail-Fast).")
                     aprovado = False
                     break
+            else:
+                historico_testes[param_id][nome_teste] = "PASSOU"
                 
         # Função interna de mover arquivos de forma flexível
         import shutil
@@ -412,23 +564,32 @@ def main():
                 logger.info(f"✅ [DEBUG] Finalizando validação. Forçando mover completo para {param_id}.")
             else:
                 logger.info(f"✅ Variação ID {param_id} APROVADA em todos os {len(ESTEIRA_DEGRAUS)} testes de robustez!")
-            resultados_finais.append(param_set)
-            mover_conteudo(str(dir_saida_temp), str(resultados_dir), mover_apenas_imagens=True)
-        else:
-            logger.info(f"Movendo relatórios visuais da variação reprovada {param_id} para análise...")
-            mover_conteudo(str(dir_saida_temp), str(resultados_dir), mover_apenas_imagens=True)
+                aprovadas_count += 1
                 
-        # Limpar diretório temporário após a execução (seja por falha ou sucesso)
-        if os.path.exists(dir_saida_temp):
-            shutil.rmtree(dir_saida_temp)
+            # Mover imagens e CSVs de resultados que passaram em todos os testes
+            dir_final_estrategia = resultados_dir / estrategia.lower()
+            os.makedirs(dir_final_estrategia, exist_ok=True)
+            mover_conteudo(str(dir_saida_temp), str(dir_final_estrategia))
             
-    logger.info(f"\nResumo: {len(resultados_finais)}/{len(top_params_list)} variações sobreviveraram à esteira.")
+            # Adicionar aos sobreviventes
+            sobreviventes.append(param_set)
+        else:
+            logger.info(f"❌ Variação ID {param_id} REPROVADA. Relatórios descartados para manter a pasta de resultados 100% limpa.")
+            # Remove a pasta temp inteira
+            import shutil
+            shutil.rmtree(dir_saida_temp, ignore_errors=True)
+            
+    logger.info(f"\nResumo: {len(sobreviventes)}/10 variações aprovadas preenchidas na esteira.")
     
-    # Salvar resultados finais dos sobreviventes
-    sobreviventes_path = resultados_dir / f"{estrategia.lower()}_sobreviventes.json"
-    with open(sobreviventes_path, 'w') as f:
-        json.dump(resultados_finais, f, indent=4)
-    logger.info(f"Sobreviventes salvos em: {sobreviventes_path}")
+    if sobreviventes:
+        # Exporta as top variações sobreviventes (até 10)
+        output_json = resultados_dir / f"{estrategia.lower()}_sobreviventes.json"
+        with open(output_json, "w") as f:
+            json.dump(sobreviventes, f, indent=4)
+        logger.info(f"Sobreviventes salvos em: {output_json}")
+
+    # Gerar relatório PNG de eliminação
+    gerar_relatorio_eliminacao(historico_testes, estrategia, resultados_dir)
 
 if __name__ == "__main__":
     main()

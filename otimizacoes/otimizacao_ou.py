@@ -15,13 +15,7 @@ warnings.filterwarnings("ignore")
 # =============================================================================
 # CONSTANTES E CAMINHOS
 # =============================================================================
-DIR_PROJETO = Path(r"c:\Users\cesar\.gemini\antigravity\scratch\Quant_Matematica.Trade")
-DIR_DATA    = DIR_PROJETO / "quant_eurusd" / "data"
-DIR_SAIDA   = DIR_DATA / "otimizacoes"
-
-PARQUET_COMPLETO    = DIR_DATA / "eurusd_h1_completo.parquet"
-PARQUET_OPERACIONAL = DIR_DATA / "eurusd_h1_operacional.parquet"
-ARQUIVO_SAIDA       = DIR_SAIDA / "otimizacao_ou_resultados.parquet"
+# Nota: Os caminhos agora são dinâmicos e definidos na inicialização (main)
 
 # =============================================================================
 # GRID SEARCH
@@ -131,11 +125,27 @@ def calcular_ou_rolling(df: pd.DataFrame, janela: int = 100) -> tuple:
     return ou_zscore, ou_halflife, ou_valido
 
 def main():
-    os.makedirs(DIR_SAIDA, exist_ok=True)
+    parser = argparse.ArgumentParser(description="Otimizador da Estratégia Ornstein-Uhlenbeck (OU)")
+    parser.add_argument("--ativo", type=str, default="eurusd", help="Ativo para otimizar (ex: eurusd)")
+    parser.add_argument("--timeframe", type=str, default="h1", help="Timeframe para otimizar (ex: h1)")
+    args = parser.parse_args()
     
-    print("Carregando dados...")
-    df_comp = pd.read_parquet(PARQUET_COMPLETO)
-    df_op = pd.read_parquet(PARQUET_OPERACIONAL)
+    ativo = args.ativo.lower()
+    timeframe = args.timeframe.lower()
+    
+    dir_projeto = Path(__file__).resolve().parent.parent
+    dir_data = dir_projeto / f"quant_{ativo}_{timeframe}" / "data"
+    dir_saida = dir_data / "otimizacoes"
+    os.makedirs(dir_saida, exist_ok=True)
+    
+    parquet_completo = dir_data / f"{ativo}_{timeframe}_completo.parquet"
+    parquet_operacional = dir_data / f"{ativo}_{timeframe}_operacional.parquet"
+    arquivo_saida = dir_saida / "otimizacao_ou_resultados.parquet"
+    arquivo_json = dir_saida / "otimizacao_ou_top10.json"
+    
+    print(f"Carregando dados para {ativo.upper()} {timeframe.upper()}...")
+    df_comp = pd.read_parquet(parquet_completo)
+    df_op = pd.read_parquet(parquet_operacional)
     
     mask_op = df_comp.index.isin(df_op.index)
     
@@ -274,12 +284,34 @@ def main():
     if resultados:
         df_res = pd.DataFrame(resultados)
         df_res = df_res.sort_values(by="Ret_DD", ascending=False).reset_index(drop=True)
-        df_res.to_parquet(ARQUIVO_SAIDA)
+        df_res.to_parquet(arquivo_saida)
         print("\n================================================================================")
         print("TOP 10 PARAMETRIZAÇÕES (RANKING POR RET/DD > 60 Trades):")
         print("================================================================================")
         print(df_res.head(10).to_string())
-        print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
+        print(f"\nResultados salvos em: {arquivo_saida}")
+        
+        # Exportar arquivo JSON top10 para consumo do pipeline
+        top_10 = df_res.head(10)
+        top10_list = []
+        for idx, row in top_10.iterrows():
+            params_dict = {
+                "id": f"OU_TOP{idx+1}",
+                "janela_ou": int(row["janela_ou"]),
+                "halflife_max": float(row["halflife_max"]),
+                "zscore_threshold": float(row["zscore_threshold"]),
+                "mult_sl": float(row["mult_sl"]),
+                "mult_tp": float(row["mult_tp"]),
+                "Trades": int(row["Trades"]),
+                "Lucro_Total_Pips": float(row["Lucro_Total_Pips"]),
+                "Max_DD_Pips": float(row["Max_DD_Pips"]),
+                "Ret_DD": float(row["Ret_DD"])
+            }
+            top10_list.append(params_dict)
+            
+        with open(arquivo_json, 'w') as f:
+            json.dump(top10_list, f, indent=4)
+        print(f"TOP 10 JSON salvo em: {arquivo_json}")
     else:
         print("Nenhuma combinação atingiu os critérios mínimos (60 trades).")
 

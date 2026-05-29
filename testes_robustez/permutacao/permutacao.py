@@ -41,7 +41,7 @@ ESTRATEGIA  = "MOMENTUM"
 # Caminho do parquet com dados completos
 # Deve conter: Open, High, Low, Close, log_return, hurst
 PARQUET_DADOS = Path(__file__).resolve().parent.parent.parent / \
-    "quant_eurusd" / "data" / "eurusd_h1_hurst.parquet"
+    "quant_eurusd_h1" / "data" / "eurusd_h1_hurst.parquet"
 
 # Parâmetros ótimos encontrados na otimização
 # Serão perturbados aleatoriamente dentro de ±20%

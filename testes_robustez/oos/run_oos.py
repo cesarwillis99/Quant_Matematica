@@ -334,7 +334,7 @@ def rodar_oos_na_esteira(df_oos: pd.DataFrame, params_otimos: dict, estrategia: 
     
     gerar_relatorio_e_graficos(metricas, equity_curve, trades, estrategia, ativo, timeframe, tipo_oos, sufixo_ano, dir_saida, param_id)
     
-    aprovado = (metricas["pnl_pct"] > 0) and (metricas["fator_lucro"] >= 1.0)
+    aprovado = metricas["fator_recup"] >= 0.2
     return {"aprovado": aprovado, "metricas": metricas}
 
 

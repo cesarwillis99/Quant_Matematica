@@ -13,15 +13,25 @@ import json
 warnings.filterwarnings("ignore")
 
 # =============================================================================
-# CONSTANTES E CAMINHOS
+# CLI & CAMINHOS GENERICOS
 # =============================================================================
-DIR_PROJETO = Path(r"c:\Users\cesar\.gemini\antigravity\scratch\Quant_Matematica.Trade")
-DIR_DATA    = DIR_PROJETO / "quant_eurusd" / "data"
+parser = argparse.ArgumentParser()
+parser.add_argument("--ativo", type=str, required=True, help="Ex: eurusd")
+parser.add_argument("--timeframe", type=str, required=True, help="Ex: h1")
+args = parser.parse_args()
+
+ativo = args.ativo.lower()
+timeframe = args.timeframe.lower()
+estrategia_nome = Path(__file__).stem.replace('otimizacao_', '')
+
+DIR_PROJETO = Path(__file__).resolve().parent.parent
+DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
 DIR_SAIDA   = DIR_DATA / "otimizacoes"
 
-PARQUET_COMPLETO    = DIR_DATA / "eurusd_h1_completo.parquet"
-PARQUET_OPERACIONAL = DIR_DATA / "eurusd_h1_operacional.parquet"
-ARQUIVO_SAIDA       = DIR_SAIDA / "otimizacao_wavelet_resultados.parquet"
+PARQUET_COMPLETO    = DIR_DATA / f"{ativo}_{timeframe}_completo.parquet"
+PARQUET_OPERACIONAL = DIR_DATA / f"{ativo}_{timeframe}_operacional.parquet"
+ARQUIVO_SAIDA       = DIR_SAIDA / f"otimizacao_{estrategia_nome}_resultados.parquet"
+ARQUIVO_JSON        = DIR_SAIDA / f"otimizacao_{estrategia_nome}_top10.json"
 
 # =============================================================================
 # GRID SEARCH
@@ -258,15 +268,30 @@ def main():
     
     if resultados:
         df_res = pd.DataFrame(resultados)
+        # Filtro de Sobrevivencia (Trades >= 60 e F.R. > 1.0)
+        mask_survivor = (df_res["Trades"] >= 60) & (df_res["Profit_Factor"] > 1.0)
+        df_res = df_res[mask_survivor]
         df_res = df_res.sort_values(by="Ret_DD", ascending=False).reset_index(drop=True)
-        df_res.to_parquet(ARQUIVO_SAIDA)
-        print("\n================================================================================")
-        print("TOP 10 PARAMETRIZAÇÕES (RANKING POR RET/DD):")
-        print("================================================================================")
-        print(df_res.head(10).to_string())
-        print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
+
+        if len(df_res) > 0:
+            df_res.to_parquet(ARQUIVO_SAIDA)
+
+            top10 = df_res.head(10).to_dict(orient="records")
+            for i, p in enumerate(top10):
+                p["id"] = f"{estrategia_nome.upper()}_TOP{i+1}"
+
+            with open(ARQUIVO_JSON, 'w') as f:
+                json.dump(top10, f, indent=4)
+
+            print("\n================================================================================")
+            print("TOP 10 PARAMETRIZACOES SOBREVIVENTES (RANKING POR RET/DD):")
+            print("================================================================================")
+            print(df_res.head(10).to_string())
+            print(f"\nResultados salvos em: {ARQUIVO_SAIDA} e {ARQUIVO_JSON}")
+        else:
+            print("Nenhuma combinacao sobreviveu aos criterios rigorosos (Min 60 Trades, F.R > 1.0).")
     else:
-        print("Nenhuma combinação atingiu os critérios mínimos (30 trades).")
+        print("Nenhuma combinacao atingiu os criterios minimos (30 trades).")
 
 if __name__ == "__main__":
     main()

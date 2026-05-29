@@ -50,7 +50,7 @@ ESTRATEGIA  = "MOMENTUM"
 # Caminho do parquet com dados completos
 # Deve conter: Open, High, Low, Close, log_return, hurst
 PARQUET_DADOS = Path(__file__).resolve().parent.parent.parent / \
-    "quant_eurusd" / "data" / "eurusd_h1_hurst.parquet"
+    "quant_eurusd_h1" / "data" / "eurusd_h1_hurst.parquet"
 
 # Parametros otimos encontrados na otimizacao
 # Se vazio, serao lidos automaticamente do parquet de otimizacao (Top1)
@@ -89,7 +89,7 @@ def carregar_params_top1(estrategia: str) -> dict:
     o dicionario de parametros da linha Top1 (Ret_DD mais alto).
     """
     dir_otim = Path(__file__).resolve().parent.parent.parent / \
-        "quant_eurusd" / "data" / "otimizacoes"
+        f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data" / "otimizacoes"
 
     nome_arquivo = f"otimizacao_{estrategia.lower()}_resultados.parquet"
     caminho = dir_otim / nome_arquivo
@@ -269,9 +269,9 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             import math as _math
             from scipy.optimize import minimize as _minimize
 
-            dir_data = Path(__file__).resolve().parent.parent.parent / "quant_eurusd" / "data"
-            df_comp = pd.read_parquet(dir_data / "eurusd_h1_completo.parquet")
-            df_op = pd.read_parquet(dir_data / "eurusd_h1_operacional.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
+            df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
 
             closes_h = df_comp["Close"].values
             n_h = len(closes_h)
@@ -364,12 +364,12 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         cache_key = f"ou_{j_ou}"
         if cache_key not in cache:
             from otimizacoes.otimizacao_ou import calcular_ou_rolling
-            dir_data = Path(__file__).resolve().parent.parent.parent / "quant_eurusd" / "data"
-            df_comp = pd.read_parquet(dir_data / "eurusd_h1_completo.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
             z, hl, val = calcular_ou_rolling(df_comp, j_ou)
             cache[cache_key] = (z, hl, val)
             if "ou_mask_op" not in cache:
-                df_op = pd.read_parquet(dir_data / "eurusd_h1_operacional.parquet")
+                df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
                 cache["ou_mask_op"] = df_comp.index.isin(df_op.index)
                 cache["ou_closes"] = df_comp["Close"].values
                 cache["ou_highs"]  = df_comp["High"].values
@@ -402,12 +402,12 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         cache_key = f"our_{j_ou}"
         if cache_key not in cache:
             from otimizacoes.otimizacao_ou_reverso import calcular_ou_rolling
-            dir_data = Path(__file__).resolve().parent.parent.parent / "quant_eurusd" / "data"
-            df_comp = pd.read_parquet(dir_data / "eurusd_h1_completo.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
             z, hl, val = calcular_ou_rolling(df_comp, j_ou)
             cache[cache_key] = (z, hl, val)
             if "our_mask_op" not in cache:
-                df_op = pd.read_parquet(dir_data / "eurusd_h1_operacional.parquet")
+                df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
                 cache["our_mask_op"] = df_comp.index.isin(df_op.index)
                 cache["our_closes"] = df_comp["Close"].values
                 cache["our_highs"]  = df_comp["High"].values
@@ -441,8 +441,8 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         cache_key = f"pca_{j_pca}"
         if cache_key not in cache:
             from otimizacoes.otimizacao_pca import calcular_pca_rolante
-            dir_data = Path(__file__).resolve().parent.parent.parent / "quant_eurusd" / "data"
-            df_comp = pd.read_parquet(dir_data / "eurusd_h1_completo.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
             cl = df_comp["Close"].values
             lr_p = np.log(cl / np.roll(cl, 1)); lr_p[0] = 0.0
             lr_sq = lr_p ** 2; lr_abs = np.abs(lr_p)
@@ -452,7 +452,7 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             pca_z, pca_dom = calcular_pca_rolante(features, j_pca)
             cache[cache_key] = (pca_z, pca_dom)
             if "pca_mask_op" not in cache:
-                df_op = pd.read_parquet(dir_data / "eurusd_h1_operacional.parquet")
+                df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
                 cache["pca_mask_op"] = df_comp.index.isin(df_op.index)
                 cache["pca_closes"] = cl
                 cache["pca_n"] = len(df_comp)
@@ -479,9 +479,9 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
     elif estrategia == "WAVELET":
         if "wav_cache_ready" not in cache:
             import pywt
-            dir_data = Path(__file__).resolve().parent.parent.parent / "quant_eurusd" / "data"
-            df_comp = pd.read_parquet(dir_data / "eurusd_h1_completo.parquet")
-            df_op = pd.read_parquet(dir_data / "eurusd_h1_operacional.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
+            df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
 
             cl = df_comp["Close"].values
             lr_w = np.log(cl / np.roll(cl, 1)); lr_w[0] = 0.0
@@ -706,8 +706,8 @@ def rodar_backtest(df: pd.DataFrame, sinal: np.ndarray,
         closes = cache.get(f"{pfx}_closes", df["Close"].values)
         n = cache.get(f"{pfx}_n", len(df))
         # Usar index do df_comp para weekday
-        dir_data = Path(__file__).resolve().parent.parent.parent / "quant_eurusd" / "data"
-        df_idx = pd.read_parquet(dir_data / "eurusd_h1_completo.parquet", columns=["Close"]).index
+        dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
+        df_idx = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet", columns=["Close"]).index
     else:
         opens  = df["Open"].values
         highs  = df["High"].values
@@ -1221,6 +1221,9 @@ def rodar_distribuicao_na_esteira(df: pd.DataFrame, params: dict, estrategia: st
     Funcao para rodar o teste de robustez por distribuicao de parametros diretamente da esteira.
     """
     import os
+    global ATIVO, TIMEFRAME
+    ATIVO = ativo.upper()
+    TIMEFRAME = timeframe.upper()
     
     # Criar pasta se nao existir
     dir_saida_path = Path(dir_saida)
@@ -1337,7 +1340,8 @@ def main():
 
     # Carregar dados base
     print("[DADOS] Carregando serie historica...")
-    df = pd.read_parquet(PARQUET_DADOS)
+    parquet_dinamico = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data" / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet"
+    df = pd.read_parquet(parquet_dinamico)
     if not isinstance(df.index, pd.DatetimeIndex):
         for col in ("time", "datetime"):
             if col in df.columns:

@@ -1,0 +1,112 @@
+[
+    {
+        "id": "HAWKES_TOP1",
+        "excitacao_maxima": 0.75,
+        "lambda_norm_min_sinal": 3.0,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 170,
+        "Lucro_Total_Pips": 661.7,
+        "Max_DD_Pips": 134.9,
+        "Ret_DD": 4.9
+    },
+    {
+        "id": "HAWKES_TOP2",
+        "excitacao_maxima": 0.65,
+        "lambda_norm_min_sinal": 3.0,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 169,
+        "Lucro_Total_Pips": 626.9,
+        "Max_DD_Pips": 134.9,
+        "Ret_DD": 4.65
+    },
+    {
+        "id": "HAWKES_TOP3",
+        "excitacao_maxima": 0.75,
+        "lambda_norm_min_sinal": 2.5,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 215,
+        "Lucro_Total_Pips": 577.2,
+        "Max_DD_Pips": 136.6,
+        "Ret_DD": 4.23
+    },
+    {
+        "id": "HAWKES_TOP4",
+        "excitacao_maxima": 0.75,
+        "lambda_norm_min_sinal": 2.0,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 291,
+        "Lucro_Total_Pips": 817.6,
+        "Max_DD_Pips": 196.1,
+        "Ret_DD": 4.17
+    },
+    {
+        "id": "HAWKES_TOP5",
+        "excitacao_maxima": 0.55,
+        "lambda_norm_min_sinal": 3.0,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 161,
+        "Lucro_Total_Pips": 544.2,
+        "Max_DD_Pips": 134.9,
+        "Ret_DD": 4.03
+    },
+    {
+        "id": "HAWKES_TOP6",
+        "excitacao_maxima": 0.65,
+        "lambda_norm_min_sinal": 2.5,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 214,
+        "Lucro_Total_Pips": 542.4,
+        "Max_DD_Pips": 136.6,
+        "Ret_DD": 3.97
+    },
+    {
+        "id": "HAWKES_TOP7",
+        "excitacao_maxima": 0.65,
+        "lambda_norm_min_sinal": 2.0,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 290,
+        "Lucro_Total_Pips": 782.8,
+        "Max_DD_Pips": 197.6,
+        "Ret_DD": 3.96
+    },
+    {
+        "id": "HAWKES_TOP8",
+        "excitacao_maxima": 0.55,
+        "lambda_norm_min_sinal": 2.0,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 281,
+        "Lucro_Total_Pips": 724.0,
+        "Max_DD_Pips": 198.3,
+        "Ret_DD": 3.65
+    },
+    {
+        "id": "HAWKES_TOP9",
+        "excitacao_maxima": 0.65,
+        "lambda_norm_min_sinal": 3.0,
+        "mult_sl": 2.0,
+        "mult_tp": 2.0,
+        "Trades": 174,
+        "Lucro_Total_Pips": 557.0,
+        "Max_DD_Pips": 163.9,
+        "Ret_DD": 3.4
+    },
+    {
+        "id": "HAWKES_TOP10",
+        "excitacao_maxima": 0.55,
+        "lambda_norm_min_sinal": 2.5,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 206,
+        "Lucro_Total_Pips": 459.7,
+        "Max_DD_Pips": 136.6,
+        "Ret_DD": 3.37
+    }
+]

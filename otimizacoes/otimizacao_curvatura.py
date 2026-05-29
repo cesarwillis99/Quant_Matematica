@@ -67,7 +67,7 @@ def main():
     lows = df_comp["Low"].values.astype(np.float32)
     opens = df_comp["Open"].values.astype(np.float32)
     
-    # ── 1. Referencial 3D e cálculo de κ e τ (Brutos) ──
+    # 1. Referencial 3D e calculo de kappa e tau (Brutos)
     print("Mapeando espaco 3D e extraindo derivadas centrais...")
     n = len(df_comp)
     R = np.log(closes / np.roll(closes, 1))
@@ -94,12 +94,12 @@ def main():
     norm_T = np.linalg.norm(T, axis=1)
     T_hat = T / norm_T[:, np.newaxis]
     
-    print("Calculando Curvatura κ...")
+    print("Calculando Curvatura kappa...")
     TxA = np.cross(T, A)
     norm_TxA = np.linalg.norm(TxA, axis=1)
     kappa = norm_TxA / (norm_T ** 3)
     
-    print("Calculando Torcao τ...")
+    print("Calculando Torcao tau...")
     dT_hat = np.zeros_like(T_hat)
     dT_hat[1:] = T_hat[1:] - T_hat[:-1]
     
@@ -119,7 +119,7 @@ def main():
     sma50 = pd.Series(closes).rolling(50, min_periods=1).mean().values
     
     # Dicionario de normalizacoes por Janela
-    print("Pre-calculando matrizes de Z-Score para κ e τ...")
+    print("Pre-calculando matrizes de Z-Score para kappa e tau...")
     normalizacoes = {}
     for j_n in GRID_PARAMS["janela_norm"]:
         k_series = pd.Series(kappa)

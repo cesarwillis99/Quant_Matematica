@@ -41,6 +41,7 @@ def rodar_what_if(
     nome_ativo: str,
     caminho_saida: str,
     pct_remocao: float = 0.01,
+    max_degradacao: float = 0.20,
 ) -> dict:
     
     # 1. Carregar CSV
@@ -69,8 +70,8 @@ def rodar_what_if(
     else:
         impacto_pct = 0.0
         
-    # 5. Critério de aprovação SQX (lucro depois da remoção >= 80% do original)
-    aprovado = lucro_after >= (0.80 * lucro_original)
+    # 5. Critério de aprovação SQX (lucro depois da remoção >= lucro original deduzido da max_degradacao)
+    aprovado = lucro_after >= ((1.0 - max_degradacao) * lucro_original)
     
     res = {
         'estrategia': nome_estrategia,

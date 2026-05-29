@@ -1,0 +1,122 @@
+[
+    {
+        "id": "OU_REVERSO_TOP1",
+        "janela_ou": 60,
+        "halflife_max": 30.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 2.5,
+        "mult_tp": 1.5,
+        "Trades": 105,
+        "Lucro_Total_Pips": 550.9,
+        "Max_DD_Pips": 81.1,
+        "Ret_DD": 6.79
+    },
+    {
+        "id": "OU_REVERSO_TOP2",
+        "janela_ou": 60,
+        "halflife_max": 40.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 2.5,
+        "mult_tp": 1.5,
+        "Trades": 105,
+        "Lucro_Total_Pips": 550.9,
+        "Max_DD_Pips": 81.1,
+        "Ret_DD": 6.79
+    },
+    {
+        "id": "OU_REVERSO_TOP3",
+        "janela_ou": 60,
+        "halflife_max": 30.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 3.0,
+        "mult_tp": 1.5,
+        "Trades": 105,
+        "Lucro_Total_Pips": 536.0,
+        "Max_DD_Pips": 99.2,
+        "Ret_DD": 5.4
+    },
+    {
+        "id": "OU_REVERSO_TOP4",
+        "janela_ou": 60,
+        "halflife_max": 40.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 3.0,
+        "mult_tp": 1.5,
+        "Trades": 105,
+        "Lucro_Total_Pips": 536.0,
+        "Max_DD_Pips": 99.2,
+        "Ret_DD": 5.4
+    },
+    {
+        "id": "OU_REVERSO_TOP5",
+        "janela_ou": 60,
+        "halflife_max": 50.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 3.0,
+        "mult_tp": 1.5,
+        "Trades": 107,
+        "Lucro_Total_Pips": 528.6,
+        "Max_DD_Pips": 99.2,
+        "Ret_DD": 5.33
+    },
+    {
+        "id": "OU_REVERSO_TOP6",
+        "janela_ou": 60,
+        "halflife_max": 40.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 2.0,
+        "mult_tp": 1.5,
+        "Trades": 106,
+        "Lucro_Total_Pips": 496.0,
+        "Max_DD_Pips": 96.4,
+        "Ret_DD": 5.15
+    },
+    {
+        "id": "OU_REVERSO_TOP7",
+        "janela_ou": 60,
+        "halflife_max": 30.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 2.0,
+        "mult_tp": 1.5,
+        "Trades": 106,
+        "Lucro_Total_Pips": 496.0,
+        "Max_DD_Pips": 96.4,
+        "Ret_DD": 5.15
+    },
+    {
+        "id": "OU_REVERSO_TOP8",
+        "janela_ou": 60,
+        "halflife_max": 50.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 2.5,
+        "mult_tp": 1.5,
+        "Trades": 107,
+        "Lucro_Total_Pips": 494.5,
+        "Max_DD_Pips": 108.1,
+        "Ret_DD": 4.57
+    },
+    {
+        "id": "OU_REVERSO_TOP9",
+        "janela_ou": 60,
+        "halflife_max": 50.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 2.0,
+        "mult_tp": 1.5,
+        "Trades": 108,
+        "Lucro_Total_Pips": 450.9,
+        "Max_DD_Pips": 98.8,
+        "Ret_DD": 4.56
+    },
+    {
+        "id": "OU_REVERSO_TOP10",
+        "janela_ou": 60,
+        "halflife_max": 60.0,
+        "zscore_threshold": 2.5,
+        "mult_sl": 2.5,
+        "mult_tp": 1.5,
+        "Trades": 119,
+        "Lucro_Total_Pips": 534.7,
+        "Max_DD_Pips": 118.7,
+        "Ret_DD": 4.5
+    }
+]

@@ -150,11 +150,11 @@ def estimar_hawkes_mle(N_array: np.ndarray):
 def executar_pipeline_hawkes():
     logger.info("Carregando bases de dados H1 para Hawkes...")
     
-    if not PARQUET_COMPLETO.exists() or not PARQUET_OPERACIONALERACIONAL.exists():
+    if not PARQUET_COMPLETO.exists() or not PARQUET_OPERACIONAL.exists():
         raise FileNotFoundError("Os arquivos Parquet não foram encontrados na pasta data/.")
         
     df = pd.read_parquet(PARQUET_COMPLETO, engine="pyarrow")
-    df_op = pd.read_parquet(PARQUET_OPERACIONALERACIONAL, engine="pyarrow")
+    df_op = pd.read_parquet(PARQUET_OPERACIONAL, engine="pyarrow")
     n_candles = len(df)
     
     # ── PARTE 1 & 2: Extração de Features e Identificação de Eventos ──

@@ -43,6 +43,7 @@ def rodar_spread(
     spread_original: float = 1.2,
     spread_multiplo: float = 1.5,
     pip_value_por_lot: float = 10.0,
+    max_degradacao: float = 0.20,
 ) -> dict:
     
     # 1. Carregar CSV
@@ -69,8 +70,8 @@ def rodar_spread(
     else:
         impacto_pct = 0.0
         
-    # 5. Critério de aprovação SQX (+80% do lucro mantido)
-    aprovado = lucro_ajustado >= (0.80 * lucro_original)
+    # 5. Critério de aprovação SQX (lucro mantido >= lucro original deduzido da max_degradacao)
+    aprovado = lucro_ajustado >= ((1.0 - max_degradacao) * lucro_original)
     
     res = {
         'estrategia': nome_estrategia,
