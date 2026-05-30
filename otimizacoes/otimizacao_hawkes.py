@@ -39,6 +39,7 @@ ARQUIVO_SAIDA       = DIR_SAIDA / "otimizacao_hawkes_resultados.parquet"
 GRID_PARAMS = {
     "excitacao_maxima": [0.55, 0.65, 0.75],
     "lambda_norm_min_sinal": [2.0, 2.5, 3.0, 3.5],
+    "lambda_norm_saida": [0.3, 0.5, 0.6, 0.8],
     "multiplicador_sl": [1.5, 2.0, 2.5],
     "multiplicador_tp": [2.0, 3.0, 4.0]
 }
@@ -246,12 +247,17 @@ def main():
             else:
                 hit_sl = np.where(fut_highs >= sl_preco)[0]
                 hit_tp = np.where(fut_lows <= tp_preco)[0]
-                
-            idx_sl = hit_sl[0] if len(hit_sl) > 0 else 9999
-            idx_tp = hit_tp[0] if len(hit_tp) > 0 else 9999
-            
-            min_idx = min(idx_sl, idx_tp)
-            
+
+            # Saída por exaustão: lambda_norm caiu abaixo do threshold
+            fut_lambda_norm = lambda_norm[i+1:end_idx]
+            hit_saida = np.where(fut_lambda_norm < params["lambda_norm_saida"])[0]
+
+            idx_sl    = hit_sl[0]    if len(hit_sl)    > 0 else 9999
+            idx_tp    = hit_tp[0]    if len(hit_tp)    > 0 else 9999
+            idx_saida = hit_saida[0] if len(hit_saida) > 0 else 9999
+
+            min_idx = min(idx_sl, idx_tp, idx_saida)
+
             if min_idx == 9999:
                 saida_preco = fut_closes[-1]
                 trade_ativo_ate_indice = end_idx - 1
@@ -261,6 +267,10 @@ def main():
             elif min_idx == idx_tp:
                 saida_preco = tp_preco
                 trade_ativo_ate_indice = i + 1 + idx_tp
+            else:
+                # Saída por exaustão do cluster de Hawkes
+                saida_preco = fut_closes[idx_saida]
+                trade_ativo_ate_indice = i + 1 + idx_saida
                 
             if direcao == 1:
                 pnl = (saida_preco - preco_entrada) * 10000.0
@@ -284,6 +294,7 @@ def main():
             resultados.append({
                 "excitacao_maxima": params["excitacao_maxima"],
                 "lambda_norm_min_sinal": params["lambda_norm_min_sinal"],
+                "lambda_norm_saida": params["lambda_norm_saida"],
                 "mult_sl": params["multiplicador_sl"],
                 "mult_tp": params["multiplicador_tp"],
                 "Trades": trades_count,
@@ -306,6 +317,7 @@ def main():
                 "id": f"HAWKES_TOP{i+1}",
                 "excitacao_maxima": float(row["excitacao_maxima"]),
                 "lambda_norm_min_sinal": float(row["lambda_norm_min_sinal"]),
+                "lambda_norm_saida": float(row["lambda_norm_saida"]),
                 "mult_sl": float(row["mult_sl"]),
                 "mult_tp": float(row["mult_tp"]),
                 "Trades": int(row["Trades"]),

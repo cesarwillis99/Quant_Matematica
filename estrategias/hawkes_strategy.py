@@ -160,7 +160,12 @@ def executar_pipeline_hawkes():
     # ── PARTE 1 & 2: Extração de Features e Identificação de Eventos ──
     logger.info("Identificando Eventos Extremos (Spikes)...")
     
-    df["R_t"] = np.log(df["Close"] / df["Close"].shift(1))
+    # Usar log_return já existente no parquet para consistência
+    # com o backtest downstream. Criar R_t como alias.
+    if "log_return" in df.columns:
+        df["R_t"] = df["log_return"]
+    else:
+        df["R_t"] = np.log(df["Close"] / df["Close"].shift(1))
     
     # std rolante ddof=1
     R_t_values = df["R_t"].values
@@ -287,7 +292,21 @@ def executar_pipeline_hawkes():
     mask_sell = cond_base & (df["R_t"] > 0)
     sinal[mask_sell] = -1
     
+    # Saída por exaustão do cluster de Hawkes:
+    # Encerrar posição quando lambda_norm cai abaixo de
+    # LAMBDA_NORM_SAIDA — sinal de que o cluster se dissipou.
+    # Esta coluna deve ser consumida pelo backtest downstream
+    # para encerrar posições antes do SL/TP quando aplicável.
+    df["hawkes_saida_threshold"] = LAMBDA_NORM_SAIDA
+
     df["sinal_hawkes"] = sinal
+
+    # IMPORTANTE: O sinal gerado em t deve ser executado com
+    # spread aplicado no preço de entrada:
+    #     LONG  → entrada = Close[t] + 0.00005
+    #     SHORT → entrada = Close[t] - 0.00005
+    # Qualquer backtest que consuma esta coluna deve aplicar
+    # este custo para manter alinhamento com a otimização.
     
     n_buys = (sinal == 1).sum()
     n_sells = (sinal == -1).sum()

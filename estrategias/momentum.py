@@ -155,8 +155,11 @@ def calcular_indicadores_momentum(df: pd.DataFrame) -> pd.DataFrame:
     # VR = std(log_retornos, janela=50, ddof=1)
     vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
     df["vr_pips"] = (vr * df["Close"] * 10000.0).astype("float32")
-    df["sl_pips"] = (2.0 * df["vr_pips"]).astype("float32")
-    df["tp_pips"] = (5.0 * df["vr_pips"]).astype("float32")
+    # Clipping alinhado com a otimização:
+    # SL mínimo 3.0 pips, máximo 60.0 pips
+    # TP mínimo 4.5 pips, máximo 90.0 pips
+    df["sl_pips"] = np.clip(2.0 * df["vr_pips"], 3.0, 60.0).astype("float32")
+    df["tp_pips"] = np.clip(5.0 * df["vr_pips"], 4.5, 90.0).astype("float32")
 
     return df
 
@@ -164,6 +167,13 @@ def gerar_sinais_momentum(df: pd.DataFrame) -> tuple:
     """
     Gera sinais operacionais LONG (+1), SHORT (-1) ou NEUTRO (0) sobre a janela operacional.
     Lógica otimizada (Opção A): Hurst > 0.50, Entropia < 0.60 e Aceleração > 75% ou < 25%.
+    
+    IMPORTANTE: O sinal gerado em t deve ser executado no
+    Close[t] com spread aplicado:
+        LONG  → entrada = Close[t] + 0.00005
+        SHORT → entrada = Close[t] - 0.00005
+    Qualquer backtest que consuma esta coluna deve aplicar
+    este custo para manter alinhamento com a otimização.
     """
     logger.info("Executando motor de geração de sinais Momentum otimizado (Opção A)...")
     
@@ -174,34 +184,35 @@ def gerar_sinais_momentum(df: pd.DataFrame) -> tuple:
     # Usamos o Hurst > 0.50 diretamente do parquet
     c1_regime = (df["hurst"] > 0.50)
     c2_entropia_operavel = (df["entropia_shannon"] < 0.60)
-    c3_ruido_block = (df["entropia_shannon"] <= 0.80)
-    
-    # Triplo Filtro Operacional
-    condicao_entrada = c1_regime & c2_entropia_operavel & c3_ruido_block & op_window
+
+    # Filtro Operacional — c2 já cobre toda a zona de entropia
+    condicao_entrada = c1_regime & c2_entropia_operavel & op_window
 
     sinal = np.zeros(len(df), dtype=np.int8)
 
     # LONG (+1)
-    cond_long = condicao_entrada & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)
+    percentil_long_trigger = 0.80
+    cond_long = condicao_entrada & (df["percentil_acel"] > percentil_long_trigger) & (df["velocidade"] > 0.0)
     sinal[cond_long] = 1
 
-    # SHORT (-1)
-    cond_short = condicao_entrada & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0)
+    # SHORT (-1) — trigger sempre espelho do LONG (alinhado com a otimização)
+    percentil_short_trigger = 1.0 - percentil_long_trigger
+    cond_short = condicao_entrada & (df["percentil_acel"] < percentil_short_trigger) & (df["velocidade"] < 0.0)
     sinal[cond_short] = -1
 
     df["sinal_momentum"] = sinal
 
     # --- Estatísticas de Bloqueio ---
     # Sinais potenciais com cinemática alinhada e sob regime de tendência
-    potencial_long = c1_regime & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)
-    potencial_short = c1_regime & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0)
+    potencial_long  = c1_regime & (df["percentil_acel"] > percentil_long_trigger)  & (df["velocidade"] > 0.0)
+    potencial_short = c1_regime & (df["percentil_acel"] < percentil_short_trigger) & (df["velocidade"] < 0.0)
     potencial = potencial_long | potencial_short
 
     # Bloqueados apenas pelo fuso/janela de horário
     bloqueado_horario = potencial & (~op_window)
 
     # Bloqueados por entropia caótica (>= 0.60 ou > 0.80) dentro da janela operacional
-    bloqueado_entropia = potencial & op_window & ((df["entropia_shannon"] >= 0.60) | (~c3_ruido_block))
+    bloqueado_entropia = potencial & op_window & (df["entropia_shannon"] >= 0.60)
 
     stats_sinais = {
         "compra": int(np.sum(sinal == 1)),
@@ -419,7 +430,6 @@ def processar_pipeline_momentum(forcar: bool = False) -> pd.DataFrame:
         sinal = df["sinal_momentum"].to_numpy()
         op_window = verificar_janela_operacional(df.index)
         c1_regime = (df["regime"] == "TENDENCIA")
-        c3_ruido_block = (df["entropia_shannon"] <= 0.80)
         potencial = (c1_regime & (df["percentil_acel"] > 0.80) & (df["velocidade"] > 0.0)) | \
                     (c1_regime & (df["percentil_acel"] < 0.20) & (df["velocidade"] < 0.0))
         
@@ -427,7 +437,7 @@ def processar_pipeline_momentum(forcar: bool = False) -> pd.DataFrame:
             "compra": int(np.sum(sinal == 1)),
             "venda": int(np.sum(sinal == -1)),
             "bloqueado_horario": int(np.sum(potencial & (~op_window))),
-            "bloqueado_entropia": int(np.sum(potencial & op_window & ((df["entropia_shannon"] >= 0.60) | (~c3_ruido_block)))),
+            "bloqueado_entropia": int(np.sum(potencial & op_window & (df["entropia_shannon"] >= 0.60))),
         }
         
         imprimir_relatorio_momentum(df, stats_sinais)

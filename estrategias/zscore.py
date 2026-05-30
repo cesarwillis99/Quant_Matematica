@@ -122,6 +122,11 @@ def gerar_sinais_zscore(df: pd.DataFrame) -> tuple:
     LONG (+1) se zscore cruzar acima de -2.5 (vindo de <= -2.5).
     SHORT (-1) se zscore cruzar abaixo de +2.5 (vindo de >= +2.5).
     Filtro de Hurst estrito: hurst < 0.40.
+    
+    IMPORTANTE: O sinal gerado em t deve ser executado no
+    Open do candle t+1. Nunca no Close[t] do mesmo candle.
+    Qualquer backtest que consuma esta coluna deve respeitar
+    esta convenção para manter alinhamento com a otimização.
     """
     logger.info("Executando motor de geração de sinais Z-Score otimizado (Opção A)...")
 
@@ -137,30 +142,33 @@ def gerar_sinais_zscore(df: pd.DataFrame) -> tuple:
     
     # Criar shifts para calcular cruzamento de volta (RETORNO)
     z = df["zscore"].values
-    z_prev = df["zscore"].shift(1).values
     
     # Gatilho de retorno: vindo de fora do limite para dentro do limite
     z_entry = 2.0
     
-    # LONG: no candle anterior estava <= -2.5, e no atual está > -2.5
-    cond_long = condicao_entrada & (z_prev <= -z_entry) & (z > -z_entry)
-    
-    # SHORT: no candle anterior estava >= 2.5, e no atual está < 2.5
-    cond_short = condicao_entrada & (z_prev >= z_entry) & (z < z_entry)
-    
-    # Garantir que não haja NaNs nos shifts
-    cond_long = cond_long & (~df["zscore"].isna()) & (~df["zscore"].shift(1).isna())
-    cond_short = cond_short & (~df["zscore"].isna()) & (~df["zscore"].shift(1).isna())
+    # LONG: fechou abaixo do limiar negativo — entrada imediata
+    cond_long = condicao_entrada & (z <= -z_entry) & (~df["zscore"].isna())
+
+    # SHORT: fechou acima do limiar positivo — entrada imediata
+    cond_short = condicao_entrada & (z >= z_entry) & (~df["zscore"].isna())
     
     sinal[cond_long] = 1
     sinal[cond_short] = -1
+
+    # Saída neutra alinhada com a otimização:
+    # LONG  encerra quando zscore >= -0.5
+    # SHORT encerra quando zscore <=  0.5
+    # Estas colunas devem ser consumidas pelo backtest
+    # para encerrar posições abertas antes do SL/TP.
+    df["zscore_saida_long"]  = -0.5
+    df["zscore_saida_short"] =  0.5
 
     df["sinal_zscore"] = sinal
 
     # --- Estatísticas de Bloqueio ---
     # Sinais potenciais (cruzamento de retorno sob Hurst < 0.40)
-    potencial_long = c1_regime & (z_prev <= -z_entry) & (z > -z_entry)
-    potencial_short = c1_regime & (z_prev >= z_entry) & (z < z_entry)
+    potencial_long  = c1_regime & (z <= -z_entry)
+    potencial_short = c1_regime & (z >= z_entry)
     potencial = potencial_long | potencial_short
 
     # Bloqueados apenas pelo filtro de horário
@@ -168,8 +176,7 @@ def gerar_sinais_zscore(df: pd.DataFrame) -> tuple:
 
     # Bloqueados por regime (cruzamento de retorno dentro do horário, mas com Hurst >= 0.40)
     potencial_sem_regime = op_window & (
-        ((z_prev <= -z_entry) & (z > -z_entry)) | 
-        ((z_prev >= z_entry) & (z < z_entry))
+        (z <= -z_entry) | (z >= z_entry)
     )
     bloqueado_regime = potencial_sem_regime & (~c1_regime)
 

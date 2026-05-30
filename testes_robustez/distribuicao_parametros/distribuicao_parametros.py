@@ -244,10 +244,14 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         z_array = cache[cache_key_z]
         hurst = df["hurst"].values
 
-        z_prev = np.concatenate(([0], z_array[:-1]))
+        # Injetando saída neutra para ZSCORE: retorno entre -0.5 e 0.5
+        cache["saida_neutra"] = (z_array > -0.5) & (z_array < 0.5)
+
         cond_base = janela_op & (hurst < h_cut)
-        cond_long  = cond_base & (z_prev <= -z_e) & (z_array > -z_e)
-        cond_short = cond_base & (z_prev >= z_e) & (z_array < z_e)
+        # LONG: fechou abaixo do limiar negativo — entrada imediata
+        cond_long  = cond_base & (z_array <= -z_e)
+        # SHORT: fechou acima do limiar positivo — entrada imediata
+        cond_short = cond_base & (z_array >= z_e)
         sinal[cond_long]  =  1
         sinal[cond_short] = -1
 
@@ -345,6 +349,11 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
 
         excit_ok  = exc < params["excitacao_maxima"]
         norm_high = lam_norm > params["lambda_norm_min_sinal"]
+        
+        # Injetando saída neutra dinamicamente no cache
+        lam_norm_saida = params.get("lambda_norm_saida", 0.6)
+        cache["saida_neutra"] = lam_norm < lam_norm_saida
+        
         cond_base = valido & excit_ok & mask_op & norm_falling & norm_high
 
         sinal_h = np.zeros(n_h, dtype=np.int8)
@@ -384,6 +393,9 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         mask_op = cache["ou_mask_op"]
         n_ou = cache["ou_n"]
 
+        # Saida neutra para OU (retorno a media zscore entre -0.3 e 0.3)
+        cache["saida_neutra"] = (z > -0.3) & (z < 0.3)
+
         cond_op = val & (hl >= 1.0) & (hl <= params["halflife_max"]) & mask_op
         cond_buy  = cond_op & (z <= -params["zscore_threshold"])
         cond_sell = cond_op & (z >= params["zscore_threshold"])
@@ -421,6 +433,9 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         z, hl, val = cache[cache_key]
         mask_op = cache["our_mask_op"]
         n_our = cache["our_n"]
+
+        # Saida neutra para OU_REVERSO (exaustao neutra inversa)
+        cache["saida_neutra"] = (z > -0.3) & (z < 0.3)
 
         cond_op = val & (hl >= 1.0) & (hl <= params["halflife_max"]) & mask_op
         # REVERSO: compra se Z >= threshold, vende se Z <= -threshold
@@ -721,6 +736,8 @@ def rodar_backtest(df: pd.DataFrame, sinal: np.ndarray,
     trades  = []
     posicao = None
 
+    saida_neutra = cache.get("saida_neutra") if cache is not None else None
+
     for t in range(n):
         dt = df_idx[t]
         weekday = dt.weekday()
@@ -735,6 +752,8 @@ def rodar_backtest(df: pd.DataFrame, sinal: np.ndarray,
         if posicao is not None:
             if eh_sexta_fechamento:
                 saida = closes[t]; motivo = "FDS"
+            elif saida_neutra is not None and saida_neutra[t]:
+                saida = closes[t]; motivo = "NEUTRO"
             else:
                 saida, motivo = None, None
                 if posicao["direcao"] == 1:
@@ -763,8 +782,8 @@ def rodar_backtest(df: pd.DataFrame, sinal: np.ndarray,
 
         if (posicao is None and not bloqueio and
                 sinal[t] != 0 and t + 1 < n):
-            sl_p = sl_pips[t]
-            tp_p = tp_pips[t]
+            sl_p = np.clip(sl_pips[t], 3.0, 60.0)
+            tp_p = np.clip(tp_pips[t], 4.5, 90.0)
             if (not np.isfinite(sl_p) or sl_p <= 0 or
                     not np.isfinite(tp_p) or tp_p <= 0):
                 equity.append(capital)

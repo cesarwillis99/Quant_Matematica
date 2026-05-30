@@ -107,14 +107,13 @@ def main():
         z_array = zscore_dict[j_z]
         vr_array = vr_dict[j_v]
 
-        z_prev = np.concatenate(([0], z_array[:-1]))
         sinais = np.zeros(n_len, dtype=np.int8)
         cond_base = mask_op & (hurst < h_cut)
 
-        # LONG: z-score cruzou de baixo para cima (retorno à média)
-        cond_long = cond_base & (z_prev <= -z_e) & (z_array > -z_e)
-        # SHORT: z-score cruzou de cima para baixo (retorno à média)
-        cond_short = cond_base & (z_prev >= z_e) & (z_array < z_e)
+        # LONG: fechou abaixo do limiar negativo — entrada imediata
+        cond_long = cond_base & (z_array <= -z_e)
+        # SHORT: fechou acima do limiar positivo — entrada imediata
+        cond_short = cond_base & (z_array >= z_e)
 
         sinais[cond_long] = 1
         sinais[cond_short] = -1

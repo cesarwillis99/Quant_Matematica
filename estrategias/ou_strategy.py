@@ -236,16 +236,9 @@ def calcular_ou_rolling(df: pd.DataFrame, janela: int = 100) -> tuple:
         
         if half_life > 50.0:
             stats_invalido["halflife_gt_50"] += 1
-            # Calcular sinal bloqueado por OU inválido se Z esticado
-            mu_bruto = alpha / (1.0 - beta)
-            den_bruto = 1.0 - np.exp(-2.0 * theta)
-            if den_bruto > 0:
-                sigma_eq_bruto = sigma_resid / np.sqrt(den_bruto)
-                if sigma_eq_bruto > 0:
-                    z_bruto = (w[-1] - mu_bruto) / sigma_eq_bruto
-                    if op_window[t] and (z_bruto <= -2.0 or z_bruto >= 2.0):
-                        bloqueados_ou_invalido_count += 1
-            continue
+            # halflife_max é filtrado na condição de entrada, não aqui.
+            # Registrar para estatísticas mas NÃO descartar o candle.
+            # (alinhado com calcular_ou_rolling da otimização)
             
         if half_life < 1.0:
             stats_invalido["halflife_lt_1"] += 1
@@ -298,8 +291,11 @@ def calcular_gestao_risco(df: pd.DataFrame) -> pd.DataFrame:
         
     vr = df["log_return"].rolling(window=50, min_periods=50).std(ddof=1)
     df["vr_pips"] = (vr * df["Close"] * 10000.0).astype(np.float32)
-    df["sl_pips"] = (2.0 * df["vr_pips"]).astype(np.float32)
-    df["tp_pips"] = (3.0 * df["vr_pips"]).astype(np.float32)
+    # Clipping alinhado com a otimização:
+    # SL mínimo 3.0 pips, máximo 60.0 pips
+    # TP mínimo 4.5 pips, máximo 90.0 pips
+    df["sl_pips"] = np.clip(2.0 * df["vr_pips"], 3.0, 60.0).astype(np.float32)
+    df["tp_pips"] = np.clip(3.0 * df["vr_pips"], 4.5, 90.0).astype(np.float32)
     
     return df
 
@@ -307,7 +303,12 @@ def calcular_gestao_risco(df: pd.DataFrame) -> pd.DataFrame:
 # GERAÇÃO DE SINAIS
 # =============================================================================
 
-def gerar_sinais_ou(df: pd.DataFrame, bloqueados_ou_invalido: int) -> tuple:
+def gerar_sinais_ou(
+    df: pd.DataFrame,
+    bloqueados_ou_invalido: int,
+    halflife_max: float = 50.0,
+    zscore_threshold: float = 2.0,
+) -> tuple:
     """
     Gera os sinais operacionais de compra (LONG = +1) e venda (SHORT = -1)
     baseados no ou_zscore do processo Ornstein-Uhlenbeck.
@@ -317,23 +318,30 @@ def gerar_sinais_ou(df: pd.DataFrame, bloqueados_ou_invalido: int) -> tuple:
     op_window = verificar_janela_operacional(df.index)
     
     # Condições de entrada obrigatórias
-    cond_operacional = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 50.0) & op_window
+    cond_operacional = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= halflife_max) & op_window
     
     sinal = np.zeros(len(df), dtype=np.int8)
     
-    # LONG (+1) se ou_zscore <= -2.0
-    cond_long = cond_operacional & (df["ou_zscore"] <= -2.0)
+    # LONG (+1) se ou_zscore <= -zscore_threshold
+    cond_long = cond_operacional & (df["ou_zscore"] <= -zscore_threshold)
     sinal[cond_long] = 1
     
-    # SHORT (-1) se ou_zscore >= 2.0
-    cond_short = cond_operacional & (df["ou_zscore"] >= 2.0)
+    # SHORT (-1) se ou_zscore >= zscore_threshold
+    cond_short = cond_operacional & (df["ou_zscore"] >= zscore_threshold)
     sinal[cond_short] = -1
     
     df["sinal_ou"] = sinal
+
+    # IMPORTANTE: O sinal gerado em t deve ser executado com
+    # spread aplicado no preço de entrada:
+    #     LONG  → entrada = Close[t] + 0.00005
+    #     SHORT → entrada = Close[t] - 0.00005
+    # Qualquer backtest que consuma esta coluna deve aplicar
+    # este custo para manter alinhamento com a otimização.
     
     # --- Estatísticas de Bloqueio ---
     # Sinais potenciais (Z esticado no horário operacional e processo OU válido)
-    potenciais_validos = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= 50.0) & ((df["ou_zscore"] <= -2.0) | (df["ou_zscore"] >= 2.0))
+    potenciais_validos = df["ou_valido"] & (df["ou_halflife"] >= 1.0) & (df["ou_halflife"] <= halflife_max) & ((df["ou_zscore"] <= -zscore_threshold) | (df["ou_zscore"] >= zscore_threshold))
     bloqueados_horario = potenciais_validos & (~op_window)
     
     stats_sinais = {
@@ -658,13 +666,23 @@ def processar_pipeline_ou(forcar: bool = False) -> pd.DataFrame:
     df_completo = pd.read_parquet(PARQUET_COMPLETO, engine="pyarrow")
     
     # 1. Pipeline Rolling OU
+    # janela=100 é o valor padrão alinhado com o centro do grid da otimização.
+    # Substituir pelo valor ótimo retornado pela otimização quando disponível
+    # (janelas testadas: 60, 80, 100, 120, 150).
     df_ou, stats_invalido, bloqueados_ou_invalido = calcular_ou_rolling(df_completo, janela=100)
     
     # 2. Volatilidade Realizada e Gestão de Risco
     df_risco = calcular_gestao_risco(df_ou)
     
     # 3. Geração de Sinais
-    df_final, stats_sinais = gerar_sinais_ou(df_risco, bloqueados_ou_invalido)
+    # halflife_max e zscore_threshold padrão alinhados com o centro do grid.
+    # Substituir pelos valores ótimos retornados pela otimização quando disponível.
+    df_final, stats_sinais = gerar_sinais_ou(
+        df_risco,
+        bloqueados_ou_invalido,
+        halflife_max=50.0,
+        zscore_threshold=2.0,
+    )
     
     # Salvar cache
     logger.info(f"Salvando base final com indicadores OU em: {PARQUET_SAIDA.name}")
