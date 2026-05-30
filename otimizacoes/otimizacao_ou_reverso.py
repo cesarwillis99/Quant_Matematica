@@ -150,6 +150,7 @@ def main():
     closes = df_comp["Close"].values
     highs = df_comp["High"].values
     lows = df_comp["Low"].values
+    opens = df_comp["Open"].values
     
     n_len = len(closes)
     
@@ -210,14 +211,12 @@ def main():
                     continue
                     
                 direcao = sinal[i]
-                preco_entrada = closes[i]
+                preco_entrada = opens[i+1]
                 
                 if direcao == 1:
-                    preco_entrada += 0.00005
                     sl_preco = preco_entrada - (sl_arr[i] / 10000.0)
                     tp_preco = preco_entrada + (tp_arr[i] / 10000.0)
                 else:
-                    preco_entrada -= 0.00005
                     sl_preco = preco_entrada + (sl_arr[i] / 10000.0)
                     tp_preco = preco_entrada - (tp_arr[i] / 10000.0)
                     
@@ -233,10 +232,14 @@ def main():
                     hit_sl = np.where(fut_highs >= sl_preco)[0]
                     hit_tp = np.where(fut_lows <= tp_preco)[0]
                     
+                fut_zscore = ou_zscore[i+1:end_idx]
+                hit_saida = np.where((fut_zscore > -0.3) & (fut_zscore < 0.3))[0]
+                    
                 idx_sl = hit_sl[0] if len(hit_sl) > 0 else 9999
                 idx_tp = hit_tp[0] if len(hit_tp) > 0 else 9999
+                idx_saida = hit_saida[0] if len(hit_saida) > 0 else 9999
                 
-                min_idx = min(idx_sl, idx_tp)
+                min_idx = min(idx_sl, idx_tp, idx_saida)
                 
                 if min_idx == 9999:
                     saida_preco = fut_closes[-1]
@@ -247,11 +250,16 @@ def main():
                 elif min_idx == idx_tp:
                     saida_preco = tp_preco
                     trade_ativo_ate_indice = i + 1 + idx_tp
+                else:
+                    saida_preco = fut_closes[idx_saida]
+                    trade_ativo_ate_indice = i + 1 + idx_saida
                     
                 if direcao == 1:
                     pnl = (saida_preco - preco_entrada) * 10000.0
                 else:
                     pnl = (preco_entrada - saida_preco) * 10000.0
+                    
+                pnl -= 0.5 # Spread
                     
                 lucro_total_pips += pnl
                 trades_count += 1
@@ -297,7 +305,7 @@ def main():
         top10_list = []
         for idx, row in top_10.iterrows():
             params_dict = {
-                "id": f"OU_REVERSO_TOP{idx+1}",
+                "id_parametro": f"OU_REVERSO_{ativo.upper()}_{timeframe.upper()}_TOP{idx+1}",
                 "janela_ou": int(row["janela_ou"]),
                 "halflife_max": float(row["halflife_max"]),
                 "zscore_threshold": float(row["zscore_threshold"]),

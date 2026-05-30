@@ -59,7 +59,7 @@ PARAMS_OTIMOS = {}
 # Parametros operacionais fixos
 CAPITAL_INICIAL    = 10_000.0
 RISCO_POR_TRADE    = 0.01
-SPREAD_PIPS        = 1.2
+SPREAD_PIPS        = 0.5
 VALOR_PIP_POR_LOTE = 10.0
 FATOR_PIPS         = 10_000
 HORA_INICIO_OP     = "10:00"
@@ -789,7 +789,7 @@ def rodar_backtest(df: pd.DataFrame, sinal: np.ndarray,
                 equity.append(capital)
                 continue
 
-            entrada = closes[t]  # Entrada no close do sinal
+            entrada = opens[t+1]  # Entrada na abertura do candle seguinte
             lote = float(np.clip(
                 (capital * RISCO_POR_TRADE) / (sl_p * VALOR_PIP_POR_LOTE),
                 0.01, 100.0))

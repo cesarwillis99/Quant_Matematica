@@ -101,6 +101,7 @@ def pre_calcular_base() -> tuple:
     closes = df["Close"].values
     highs = df["High"].values
     lows = df["Low"].values
+    opens = df["Open"].values
     
     R_t = np.zeros(n_candles, dtype=np.float32)
     R_t[1:] = np.log(closes[1:] / closes[:-1])
@@ -166,13 +167,13 @@ def pre_calcular_base() -> tuple:
     vr_pips = VR * closes * 10000.0
     mask_op = df.index.isin(df_op.index)
     
-    return closes, highs, lows, R_t, vr_pips, lambda_norm, excitacao, valido_hist, mask_op, n_candles
+    return opens, closes, highs, lows, R_t, vr_pips, lambda_norm, excitacao, valido_hist, mask_op, n_candles
 
 
 def main():
     os.makedirs(DIR_SAIDA, exist_ok=True)
     
-    closes, highs, lows, R_t, vr_pips, lambda_norm, excitacao, valido_hist, mask_op, n_candles = pre_calcular_base()
+    opens, closes, highs, lows, R_t, vr_pips, lambda_norm, excitacao, valido_hist, mask_op, n_candles = pre_calcular_base()
     
     keys = list(GRID_PARAMS.keys())
     combinacoes = list(itertools.product(*[GRID_PARAMS[k] for k in keys]))
@@ -225,14 +226,12 @@ def main():
                 continue
                 
             direcao = sinal[i]
-            preco_entrada = closes[i]
+            preco_entrada = opens[i+1]
             
             if direcao == 1:
-                preco_entrada += 0.00005
                 sl_preco = preco_entrada - (sl_arr[i] / 10000.0)
                 tp_preco = preco_entrada + (tp_arr[i] / 10000.0)
             else:
-                preco_entrada -= 0.00005
                 sl_preco = preco_entrada + (sl_arr[i] / 10000.0)
                 tp_preco = preco_entrada - (tp_arr[i] / 10000.0)
                 
@@ -277,6 +276,8 @@ def main():
             else:
                 pnl = (preco_entrada - saida_preco) * 10000.0
                 
+            pnl -= 0.5 # Spread
+                
             lucro_total_pips += pnl
             trades_count += 1
             
@@ -314,7 +315,7 @@ def main():
         top10_list = []
         for i, row in df_res.head(10).iterrows():
             top10_list.append({
-                "id": f"HAWKES_TOP{i+1}",
+                "id_parametro": f"HAWKES_{ativo.upper()}_{timeframe.upper()}_TOP{i+1}",
                 "excitacao_maxima": float(row["excitacao_maxima"]),
                 "lambda_norm_min_sinal": float(row["lambda_norm_min_sinal"]),
                 "lambda_norm_saida": float(row["lambda_norm_saida"]),

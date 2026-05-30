@@ -48,7 +48,6 @@ GRID_PARAMS = {
 
 ESCALAS = [4, 12, 24, 120]
 WAVELET_TYPE = 'cmor1.5-1.0'
-SPREAD_PIPS = 1.2
 
 def main():
     os.makedirs(DIR_SAIDA, exist_ok=True)
@@ -62,6 +61,7 @@ def main():
     closes = df_comp["Close"].values
     highs = df_comp["High"].values
     lows = df_comp["Low"].values
+    opens = df_comp["Open"].values
     log_ret = np.log(closes / np.roll(closes, 1))
     log_ret[0] = 0.0
     
@@ -178,7 +178,7 @@ def main():
             if i + 1 >= n_len:
                 pbar.update(1)
                 continue
-            preco_entrada = closes[i + 1]
+            preco_entrada = opens[i + 1]
             
             if direcao == 1:
                 sl_preco = preco_entrada - (sl_arr[i] / 10000.0)
@@ -225,9 +225,11 @@ def main():
                 trade_ativo_ate_indice = i + 1 + idx_nt
                 
             if direcao == 1:
-                pnl = (saida_preco - preco_entrada) * 10000.0 - SPREAD_PIPS
+                pnl = (saida_preco - preco_entrada) * 10000.0
             else:
-                pnl = (preco_entrada - saida_preco) * 10000.0 - SPREAD_PIPS
+                pnl = (preco_entrada - saida_preco) * 10000.0
+                
+            pnl -= 0.5 # Spread
                 
             lucro_total_pips += pnl
             trades_count += 1
@@ -279,7 +281,7 @@ def main():
 
             top10 = df_res.head(10).to_dict(orient="records")
             for i, p in enumerate(top10):
-                p["id"] = f"{estrategia_nome.upper()}_TOP{i+1}"
+                p["id_parametro"] = f"{estrategia_nome.upper()}_{ativo.upper()}_{timeframe.upper()}_TOP{i+1}"
 
             with open(ARQUIVO_JSON, 'w') as f:
                 json.dump(top10, f, indent=4)

@@ -118,6 +118,7 @@ def main():
     closes = df_comp["Close"].values
     highs = df_comp["High"].values
     lows = df_comp["Low"].values
+    opens = df_comp["Open"].values
     
     # Gerar Features do PCA
     R_t = np.log(closes / np.roll(closes, 1))
@@ -185,15 +186,13 @@ def main():
                     continue
                     
                 direcao = sinal[i]
-                preco_entrada = closes[i]
+                preco_entrada = opens[i+1]
                 
                 # Spread
                 if direcao == 1:
-                    preco_entrada += 0.00005
                     sl_preco = preco_entrada - (sl_arr[i] / 10000.0)
                     tp_preco = preco_entrada + (tp_arr[i] / 10000.0)
                 else:
-                    preco_entrada -= 0.00005
                     sl_preco = preco_entrada + (sl_arr[i] / 10000.0)
                     tp_preco = preco_entrada - (tp_arr[i] / 10000.0)
                     
@@ -228,6 +227,8 @@ def main():
                     pnl = (saida_preco - preco_entrada) * 10000.0
                 else:
                     pnl = (preco_entrada - saida_preco) * 10000.0
+                    
+                pnl -= 0.5 # Spread
                     
                 lucro_total_pips += pnl
                 trades_count += 1

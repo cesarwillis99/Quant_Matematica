@@ -83,6 +83,7 @@ def main():
     closes = df["Close"].values
     highs = df["High"].values
     lows = df["Low"].values
+    opens = df["Open"].values
     n_len = len(closes)
     
     print("Calculando indicadores base (Velocidade, Aceleração, Percentil, Entropia e VR)...")
@@ -160,14 +161,12 @@ def main():
                 continue
                 
             direcao = sinal[i]
-            preco_entrada = closes[i]
+            preco_entrada = opens[i+1]
             
             if direcao == 1:
-                preco_entrada += 0.00005
                 sl_preco = preco_entrada - (sl_arr[i] / 10000.0)
                 tp_preco = preco_entrada + (tp_arr[i] / 10000.0)
             else:
-                preco_entrada -= 0.00005
                 sl_preco = preco_entrada + (sl_arr[i] / 10000.0)
                 tp_preco = preco_entrada - (tp_arr[i] / 10000.0)
                 
@@ -202,6 +201,8 @@ def main():
                 pnl = (saida_preco - preco_entrada) * 10000.0
             else:
                 pnl = (preco_entrada - saida_preco) * 10000.0
+                
+            pnl -= 0.5 # Spread
                 
             lucro_total_pips += pnl
             trades_count += 1
@@ -240,7 +241,7 @@ def main():
         # Gerar o JSON top10 com ID para a esteira
         top10 = df_res.head(10).to_dict(orient="records")
         for i, p in enumerate(top10):
-            p["id"] = f"{estrategia_nome.upper()}_TOP{i+1}"
+            p["id_parametro"] = f"{estrategia_nome.upper()}_{ativo.upper()}_{timeframe.upper()}_TOP{i+1}"
             
         with open(ARQUIVO_JSON, 'w') as f:
             json.dump(top10, f, indent=4)

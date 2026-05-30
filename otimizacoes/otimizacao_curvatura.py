@@ -327,7 +327,7 @@ def main():
             top10 = df_res.head(10).to_dict(orient="records")
             # Adiciona um ID a cada parametro
             for i, p in enumerate(top10):
-                p["id"] = f"{estrategia_nome.upper()}_TOP{i+1}"
+                p["id_parametro"] = f"{estrategia_nome.upper()}_{ativo.upper()}_{timeframe.upper()}_TOP{i+1}"
                 
             with open(ARQUIVO_JSON, 'w') as f:
                 json.dump(top10, f, indent=4)
