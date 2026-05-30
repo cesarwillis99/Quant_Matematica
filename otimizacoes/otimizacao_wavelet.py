@@ -42,12 +42,13 @@ GRID_PARAMS = {
     "coerencia_cutoff": [0.40, 0.50, 0.60, 0.70],
     "energia_quantile": [0.30, 0.40, 0.50],
     "pot_s1_cutoff": [0.6, 0.8, 1.0],
-    "multiplicador_sl": [1.5, 2.0, 2.5],
-    "multiplicador_tp": [2.5, 3.5, 4.5]
+    "mult_sl": [1.5, 2.0, 2.5],
+    "mult_tp": [2.5, 3.5, 4.5]
 }
 
 ESCALAS = [4, 12, 24, 120]
 WAVELET_TYPE = 'cmor1.5-1.0'
+SPREAD_PIPS = 1.2
 
 def main():
     os.makedirs(DIR_SAIDA, exist_ok=True)
@@ -148,12 +149,12 @@ def main():
         sinal[cond_venda] = -1
         
         entradas_idx = np.where(sinal != 0)[0]
-        if len(entradas_idx) < 30:
+        if len(entradas_idx) < 50:
             pbar.update(1)
             continue
             
-        sl_arr = np.clip(params["multiplicador_sl"] * vr_pips, 3.0, 60.0)
-        tp_arr = np.clip(params["multiplicador_tp"] * vr_pips, 4.5, 90.0)
+        sl_arr = np.clip(params["mult_sl"] * vr_pips, 3.0, 60.0)
+        tp_arr = np.clip(params["mult_tp"] * vr_pips, 4.5, 90.0)
         
         lucro_total_pips = 0.0
         max_drawdown_pips = 0.0
@@ -174,15 +175,15 @@ def main():
                 continue
                 
             direcao = sinal[i]
-            preco_entrada = closes[i]
+            if i + 1 >= n_len:
+                pbar.update(1)
+                continue
+            preco_entrada = closes[i + 1]
             
-            # Aplicar spread real de 0.5
             if direcao == 1:
-                preco_entrada += 0.00005
                 sl_preco = preco_entrada - (sl_arr[i] / 10000.0)
                 tp_preco = preco_entrada + (tp_arr[i] / 10000.0)
             else:
-                preco_entrada -= 0.00005
                 sl_preco = preco_entrada + (sl_arr[i] / 10000.0)
                 tp_preco = preco_entrada - (tp_arr[i] / 10000.0)
                 
@@ -224,9 +225,9 @@ def main():
                 trade_ativo_ate_indice = i + 1 + idx_nt
                 
             if direcao == 1:
-                pnl = (saida_preco - preco_entrada) * 10000.0
+                pnl = (saida_preco - preco_entrada) * 10000.0 - SPREAD_PIPS
             else:
-                pnl = (preco_entrada - saida_preco) * 10000.0
+                pnl = (preco_entrada - saida_preco) * 10000.0 - SPREAD_PIPS
                 
             lucro_total_pips += pnl
             trades_count += 1
@@ -245,7 +246,7 @@ def main():
                 
         pbar.update(1)
         
-        if trades_count >= 30 and max_drawdown_pips > 0:
+        if trades_count >= 50 and max_drawdown_pips > 0:
             ret_dd = lucro_total_pips / max_drawdown_pips
             profit_factor = (soma_ganhos / soma_perdas) if soma_perdas > 0 else 99.0
             
@@ -255,8 +256,8 @@ def main():
                 "coerencia_cutoff": params["coerencia_cutoff"],
                 "energia_quantile": params["energia_quantile"],
                 "pot_s1_cutoff": params["pot_s1_cutoff"],
-                "mult_sl": params["multiplicador_sl"],
-                "mult_tp": params["multiplicador_tp"],
+                "mult_sl": params["mult_sl"],
+                "mult_tp": params["mult_tp"],
                 "Trades": trades_count,
                 "Lucro_Total_Pips": round(lucro_total_pips, 1),
                 "Max_DD_Pips": round(max_drawdown_pips, 1),
@@ -291,7 +292,7 @@ def main():
         else:
             print("Nenhuma combinacao sobreviveu aos criterios rigorosos (Min 60 Trades, F.R > 1.0).")
     else:
-        print("Nenhuma combinacao atingiu os criterios minimos (30 trades).")
+        print("Nenhuma combinacao atingiu os criterios minimos (50 trades).")
 
 if __name__ == "__main__":
     main()

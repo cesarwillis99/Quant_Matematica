@@ -18,6 +18,15 @@ warnings.filterwarnings("ignore")
 estrategia_nome = Path(__file__).stem.replace('otimizacao_', '')
 DIR_PROJETO = Path(__file__).resolve().parent.parent
 
+ATIVO = "EURUSD"
+TIMEFRAME = "H1"
+DIR_DATA = DIR_PROJETO / "data"
+PARQUET_COMPLETO = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
+PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
+DIR_SAIDA = DIR_DATA / "otimizacoes"
+ARQUIVO_SAIDA = DIR_SAIDA / f"otimizacao_{ATIVO.lower()}_{TIMEFRAME.lower()}_{estrategia_nome.lower()}_resultados.parquet"
+ARQUIVO_JSON = DIR_SAIDA / f"selecionados_{estrategia_nome.lower()}.json"
+
 # =============================================================================
 # GRID SEARCH
 # =============================================================================
@@ -259,7 +268,7 @@ def main():
     if resultados:
         df_res = pd.DataFrame(resultados)
         # Filtro de Sobrevivencia (Trades >= 60 e F.R. > 1.0)
-        mask_survivor = (df_res["Trades"] >= 60) & (df_res["Profit_Factor"] > 1.0)
+        mask_survivor = (df_res["Trades"] >= 60) & (df_res["Ret_DD"] > 1.0)
         df_res = df_res[mask_survivor]
         df_res = df_res.sort_values(by="Ret_DD", ascending=False).reset_index(drop=True)
 
@@ -268,7 +277,7 @@ def main():
 
             top10 = df_res.head(10).to_dict(orient="records")
             for i, p in enumerate(top10):
-                p["id"] = f"{estrategia_nome.upper()}_TOP{i+1}"
+                p["id_parametro"] = f"PCA_{ATIVO}_{TIMEFRAME}_TOP{i+1}"
 
             with open(ARQUIVO_JSON, 'w') as f:
                 json.dump(top10, f, indent=4)

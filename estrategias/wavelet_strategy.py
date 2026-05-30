@@ -98,7 +98,7 @@ def calcular_wavelet() -> pd.DataFrame:
         raise FileNotFoundError(f"Base não encontrada: {PARQUET_COMPLETO}")
         
     df = pd.read_parquet(PARQUET_COMPLETO)
-    df_op = pd.read_parquet(PARQUET_OPERACIONALERACIONAL)
+    df_op = pd.read_parquet(PARQUET_OPERACIONAL)
     mask_op = df.index.isin(df_op.index)
     
     # ── 1. CWT (Transformada Wavelet Contínua) ──
@@ -164,10 +164,8 @@ def calcular_wavelet() -> pd.DataFrame:
     vr = pd.Series(log_ret).rolling(window=JANELA_VR).std(ddof=1).values
     df["vr_pips"] = vr * df["Close"] * 10000.0
     
-    df["sl_pips"] = MULT_SL * df["vr_pips"]
-    df["tp_pips"] = MULT_TP * df["vr_pips"]
-    df["sl_pips"] = df["sl_pips"].clip(lower=3.0, upper=60.0).fillna(10.0)
-    df["tp_pips"] = df["tp_pips"].clip(lower=4.5, upper=90.0).fillna(15.0)
+    df["sl_pips"] = (MULT_SL * df["vr_pips"]).fillna(10.0)
+    df["tp_pips"] = (MULT_TP * df["vr_pips"]).fillna(15.0)
     
     # ── 3. Lógica de Geração de Sinais ──
     logger.info("Aplicando as regras de estado direcional...")
@@ -239,7 +237,7 @@ def gerar_relatorio_cli(df: pd.DataFrame):
     print(f"    - Total Sinais Ativos : {np.sum(sinais != 0)}")
     
     # Bloqueios teóricos
-    mask_op = df.index.isin(pd.read_parquet(PARQUET_OPERACIONALERACIONAL).index)
+    mask_op = df.index.isin(pd.read_parquet(PARQUET_OPERACIONAL).index)
     bloq_horario = np.sum(~mask_op)
     bloq_coer = np.sum(df["wav_coerencia_12"] < 0.50)
     bloq_ene = np.sum(df["wav_energia_total"] <= df["wav_energia_p40"])

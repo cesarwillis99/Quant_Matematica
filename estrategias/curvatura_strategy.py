@@ -154,12 +154,16 @@ def calcular_curvatura() -> pd.DataFrame:
     
     # ── 4. Normalização Rolling (Z-Score) ──
     logger.info("Normalizando matriz espacial...")
-    k_roll = df["curv_kappa"].rolling(JANELA_NORM, min_periods=1)
+    # janela_norm_atual recebe JANELA_NORM por padrão.
+    # Substituir pelo valor ótimo retornado pela otimização quando disponível.
+    # Valores testados no grid: [50, 80, 100, 120]
+    janela_norm_atual = JANELA_NORM
+    k_roll = df["curv_kappa"].rolling(janela_norm_atual, min_periods=1)
     k_mean = k_roll.mean()
     k_std = k_roll.std().replace(0, 1e-9).fillna(1e-9)
     kappa_norm = (df["curv_kappa"] - k_mean) / k_std
     
-    t_roll = df["curv_tau"].rolling(JANELA_NORM, min_periods=1)
+    t_roll = df["curv_tau"].rolling(janela_norm_atual, min_periods=1)
     t_mean = t_roll.mean()
     t_std = t_roll.std().replace(0, 1e-9).fillna(1e-9)
     tau_norm = (df["curv_tau"] - t_mean) / t_std
@@ -196,12 +200,20 @@ def calcular_curvatura() -> pd.DataFrame:
     
     # ── 6. Volatilidade e Gestão de Risco ──
     logger.info("Mapeando Gestão de Risco (VR)...")
-    vr = pd.Series(R).rolling(window=JANELA_VR).std(ddof=1).values
+    # janela_vr_atual recebe JANELA_VR por padrão.
+    # Substituir pelo valor ótimo retornado pela otimização quando disponível.
+    # Valores testados no grid: [20, 30, 50, 80]
+    # mult_sl_atual e mult_tp_atual recebem as constantes por padrão.
+    # mult_sl testados: [1.5, 2.0, 2.5] | mult_tp testados: [2.0, 3.0, 3.5, 4.0]
+    janela_vr_atual  = JANELA_VR
+    mult_sl_atual    = MULT_SL
+    mult_tp_atual    = MULT_TP
+    vr = pd.Series(R).rolling(window=janela_vr_atual).std(ddof=1).values
     vr_pips = vr * C * 10000.0
     
     df["vr_pips"] = vr_pips.astype(np.float32)
-    sl = np.clip(MULT_SL * vr_pips, 3.0, 60.0)
-    tp = np.clip(MULT_TP * vr_pips, 4.5, 90.0)
+    sl = np.clip(mult_sl_atual * vr_pips, 3.0, 60.0)
+    tp = np.clip(mult_tp_atual * vr_pips, 4.5, 90.0)
     df["sl_pips"] = pd.Series(sl, index=df.index).fillna(10.0).astype(np.float32)
     df["tp_pips"] = pd.Series(tp, index=df.index).fillna(15.0).astype(np.float32)
     
@@ -225,6 +237,15 @@ def calcular_curvatura() -> pd.DataFrame:
     sinais[cond_venda] = -1
     
     df["sinal_curvatura"] = sinais
+    
+    # IMPORTANTE: O sinal gerado em t deve ser executado no
+    # Open do candle t+1 — alinhado com a otimização.
+    # Qualquer backtest que consuma esta coluna deve respeitar
+    # esta convenção para manter alinhamento com a otimização.
+
+    # IMPORTANTE: O backtest deve descontar 0.5 pip de spread
+    # por trade no cálculo do PnL para manter alinhamento
+    # com a otimização (pnl -= 0.5 após cálculo bruto).
     
     # Estatísticas de Bloqueio
     total_picos_fundos = np.sum(direcao == 1)
