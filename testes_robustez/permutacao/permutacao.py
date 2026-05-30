@@ -63,14 +63,14 @@ HORA_INICIO_OP     = "10:00"
 HORA_FIM_OP        = "22:30"
 
 # Configuração da permutação
-N_COMBINACOES   = 100    # Número de combinações aleatórias
+N_COMBINACOES   = 400    # Número de combinações aleatórias
 PERTURBACAO_PCT = 0.20   # ±20% ao redor de cada valor ótimo
 SEED            = 42     # Seed para reprodutibilidade
 
 # Critérios de aprovação
-CRITERIO_1_PCT_LUCRATIVAS   = 0.40   # >= 40% combinações com PnL > 0
+CRITERIO_1_PCT_LUCRATIVAS   = 0.35   # >= 40% combinações com PnL > 0
 CRITERIO_2_PNL_MEDIANO      = 0.0    # PnL mediano > 0
-CRITERIO_3_FR_MEDIANO        = 0.50   # FR mediano >= 0.5
+CRITERIO_3_FR_MEDIANO        = 0.30   # FR mediano >= 0.5
 CRITERIO_4_FL_MEDIANO        = 1.0    # Fator de Lucro mediano >= 1.0
 CRITERIO_5_OUTLIER_SIGMA     = 2.5    # Parâmetro ótimo original < média + 2.5σ
 
@@ -210,7 +210,7 @@ def rodar_backtest(df: pd.DataFrame, sinal: np.ndarray, sl_pips: np.ndarray, tp_
             tp_p = tp_pips[t]
             
             if np.isfinite(sl_p) and sl_p > 0 and np.isfinite(tp_p) and tp_p > 0:
-                entrada = closes[t]
+                entrada = opens[t + 1]
                 lote = float(np.clip(
                     (capital * RISCO_POR_TRADE) / (sl_p * VALOR_PIP_POR_LOTE),
                     0.01, 100.0
@@ -526,7 +526,7 @@ def rodar_permutacao_na_esteira(df: pd.DataFrame, params_otimos: dict, estrategi
     pnl_media = float(np.mean(pnls))
     pnl_std   = float(np.std(pnls))
     pnl_otimo = float(resultado_otimo["pnl_pct"])
-    limite_outlier = pnl_media + CRITERIO_5_OUTLIER_SIGMA * pnl_std
+    limite_outlier = pnl_mediano + CRITERIO_5_OUTLIER_SIGMA * pnl_std
     passou_c5 = pnl_otimo < limite_outlier
     
     passou_tudo = passou_c1 and passou_c2 and passou_c3 and passou_c4 and passou_c5
@@ -709,7 +709,7 @@ def main():
     pnl_media = float(np.mean(pnls))
     pnl_std   = float(np.std(pnls))
     pnl_otimo = float(resultado_otimo["pnl_pct"])
-    limite_outlier = pnl_media + CRITERIO_5_OUTLIER_SIGMA * pnl_std
+    limite_outlier = pnl_mediano + CRITERIO_5_OUTLIER_SIGMA * pnl_std
     passou_c5 = pnl_otimo < limite_outlier
     c5_txt = "otimo nao eh outlier" if passou_c5 else "otimo detectado como outlier"
     

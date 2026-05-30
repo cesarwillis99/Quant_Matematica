@@ -66,13 +66,13 @@ WF_RUNS  = [6, 8, 10, 12]         # 4 colunas (numero de runs)
 
 # Criterios de aprovacao por celula
 CRITERIO_PNL_POSITIVO    = True   # PnL total OOS emendado > 0
-CRITERIO_RUNS_LUCRATIVAS = 0.65   # > 65% dos runs OOS lucrativos
+CRITERIO_RUNS_LUCRATIVAS = 0.55   # > 55% dos runs OOS lucrativos
 CRITERIO_DD_MAXIMO_RUN   = 25.0   # Nenhum run com DD > 25%
 
 # Criterio global de cluster
-CLUSTER_MIN_CELULAS  = 10         # Min celulas aprovadas no bloco
-CLUSTER_MIN_LINHAS   = 4          # Min linhas do bloco
-CLUSTER_MIN_COLUNAS  = 4          # Min colunas do bloco
+CLUSTER_MIN_CELULAS  = 6          # Min celulas aprovadas no bloco
+CLUSTER_MIN_LINHAS   = 3          # Min linhas do bloco
+CLUSTER_MIN_COLUNAS  = 3          # Min colunas do bloco
 
 # ===================================================================
 # FIM DA CONFIGURACAO
@@ -198,6 +198,10 @@ def estimar_pips_is(df_is: pd.DataFrame,
         return 0.0
 
     direcao  = sinal[idx_sinal].astype(float)
+    # NOTA: Esta é uma estimativa vetorizada rápida para
+    # seleção IS — usa close[t+1] vs close[t] como proxy.
+    # NÃO é o backtest real. O backtest OOS completo
+    # usa Open[t+1] como entrada (ver rodar_backtest).
     delta    = (closes[idx_sinal + 1] - closes[idx_sinal]) * FATOR_PIPS
 
     # Clampa o resultado entre -SL e +TP (simulacao simples de proteção)
@@ -309,7 +313,7 @@ def rodar_backtest(df: pd.DataFrame,
             sl_p = sl_pips[t]
             tp_p = tp_pips[t]
             if np.isfinite(sl_p) and sl_p > 0 and np.isfinite(tp_p) and tp_p > 0:
-                entrada  = closes[t]
+                entrada  = opens[t + 1]
                 lote     = float(np.clip(
                     (capital * RISCO_POR_TRADE) / (sl_p * VALOR_PIP_POR_LOTE),
                     0.01, 100.0

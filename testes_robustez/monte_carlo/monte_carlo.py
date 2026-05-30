@@ -41,7 +41,7 @@ def rodar_monte_carlo(
     nome_ativo: str,
     caminho_saida: str,
     n_simulacoes: int = 10000,
-    prob_skip: float = 0.05
+    prob_skip: float = 0.10
 ) -> dict:
     
     df = pd.read_csv(caminho_csv)
@@ -68,6 +68,10 @@ def rodar_monte_carlo(
     pnl_sims = pnl[indices]
     
     # Simulação de falhas (Random Skip)
+    # NOTA: trades skippados viram PnL zero (não são removidos da sequência).
+    # Isso é uma aproximação conservadora — subestima levemente o impacto
+    # no drawdown, mas preserva a vetorização de alta performance.
+    # O efeito é válido para estressar lucro total e fator de lucro.
     keep_mask = np.random.rand(n_simulacoes, n_trades) >= prob_skip
     pnl_sims = pnl_sims * keep_mask
     
@@ -91,11 +95,13 @@ def rodar_monte_carlo(
     
     # Níveis de Confiança (Percentis inferiores para garantir o Pior Cenário)
     ret_dd_50 = np.percentile(sim_ret_dds, 50)
-    ret_dd_70 = np.percentile(sim_ret_dds, 30) # 70% das simulações foram melhores que isso
+    # Percentil 30 = pior cenário onde 70% das simulações foram melhores
+    ret_dd_p30 = np.percentile(sim_ret_dds, 30)
     pf_99 = np.percentile(sim_pfs, 1)          # 99% das simulações foram melhores que isso
     
-    passou_ex1 = ret_dd_50 >= 1.5
-    passou_ex2 = ret_dd_70 >= (0.40 * orig_ret_dd)
+    # Ex.1: 50% das simulações devem ter FR >= 50% do FR original
+    passou_ex1 = ret_dd_50 >= (0.50 * orig_ret_dd)
+    passou_ex2 = ret_dd_p30 >= (0.40 * orig_ret_dd)
     passou_ex3 = pf_99 >= 1.01
     
     aprovado = bool(passou_ex1 and passou_ex2 and passou_ex3)
@@ -106,7 +112,7 @@ def rodar_monte_carlo(
         'n_simulacoes': n_simulacoes,
         'orig_ret_dd': orig_ret_dd,
         'ret_dd_50': ret_dd_50,
-        'ret_dd_70': ret_dd_70,
+        'ret_dd_p30': ret_dd_p30,
         'orig_pf': orig_pf,
         'pf_99': pf_99,
         'passou_ex1': passou_ex1,
@@ -164,7 +170,7 @@ def gerar_jpg(res: dict, caminho_saida: str):
     ax.text(0.08, y, "Exigência 2: Ret/DD (70% Conf.) >= 40% do Original", color=cor_titulo, fontsize=11)
     st2 = "[ OK ]" if res['passou_ex2'] else "[ FAIL ]"
     c2 = cor_ok if res['passou_ex2'] else cor_fail
-    ax.text(0.08, y - lh, f"[Alvo: {alvo_ex2:.2f}]  vs  [Sim 70%: {res['ret_dd_70']:.2f}]", color=cor_texto, fontsize=10)
+    ax.text(0.08, y - lh, f"[Alvo: {alvo_ex2:.2f}]  vs  [Sim P30: {res['ret_dd_p30']:.2f}]", color=cor_texto, fontsize=10)
     ax.text(0.85, y - lh, st2, color=c2, fontsize=11, fontweight='bold', ha='center')
     
     y -= 3*lh
@@ -199,7 +205,7 @@ def main():
     parser.add_argument("--timeframe",  type=str, default="H1", help="Timeframe (ex: H1)")
     parser.add_argument("--estrategia", type=str, default="ALL", help="Estratégia específica ou ALL para rodar todas")
     parser.add_argument("--n_sim",      type=int, default=10000, help="Número de simulações")
-    parser.add_argument("--prob_skip",  type=float, default=0.05, help="Probabilidade de skip trade")
+    parser.add_argument("--prob_skip",  type=float, default=0.10, help="Probabilidade de skip trade")
     args = parser.parse_args()
 
     ativo      = args.ativo.lower()
@@ -269,7 +275,7 @@ def main():
     for r in resultados:
         res_str = "APROVADO [OK]" if r['aprovado'] else "REPROVADO [X]"
         e1 = f"{r['ret_dd_50']:>6.2f} " + ("(OK)" if r['passou_ex1'] else "(X)")
-        e2 = f"{r['ret_dd_70']:>6.2f} " + ("(OK)" if r['passou_ex2'] else "(X)")
+        e2 = f"{r['ret_dd_p30']:>6.2f} " + ("(OK)" if r['passou_ex2'] else "(X)")
         e3 = f"{r['pf_99']:>6.2f} " + ("(OK)" if r['passou_ex3'] else "(X)")
         
         print(f"{r['estrategia'].upper():<15} | {e1:<15} | {e2:<20} | {e3:<15} | {res_str}")

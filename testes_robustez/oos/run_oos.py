@@ -73,7 +73,8 @@ def calcular_hurst_janela(retornos: np.ndarray) -> float:
     if len(log_n) < 2: return np.nan
     h = _quick_ols_slope(np.array(log_n), np.array(log_rs))
     if np.isnan(h) or h < 0.0 or h > 1.5: return np.nan
-    return # ===================================================================
+    return float(np.clip(h, 0.0, 1.0))
+# ===================================================================
 #  PARTE 2 -- ROTEADOR MULTI-ESTRATEGIA (BASEADO NO DISTRIBUICAO)
 # ===================================================================
 from testes_robustez.distribuicao_parametros.distribuicao_parametros import calcular_sinais
@@ -203,9 +204,12 @@ def calcular_metricas(equity_curve: pd.Series, trades: list) -> dict:
     fator_lucro = sum(t["pnl_monetario"] for t in ganhos) / max(abs(sum(t["pnl_monetario"] for t in perdas)), 1e-9) if ganhos else 0.0
     
     # Sharpe blindado contra desvio zero
-    retornos_diarios = equity_curve.resample("1D").last().pct_change().fillna(0.0)
-    std_diario = retornos_diarios.std()
-    sharpe = (retornos_diarios.mean() / std_diario) * math.sqrt(252) if std_diario > 0.0 else 0.0
+    if not isinstance(equity_curve.index, pd.DatetimeIndex):
+        sharpe = 0.0
+    else:
+        retornos_diarios = equity_curve.resample("1D").last().pct_change().fillna(0.0)
+        std_diario = retornos_diarios.std()
+        sharpe = (retornos_diarios.mean() / std_diario) * math.sqrt(252) if std_diario > 0.0 else 0.0
     
     pico = equity_curve.cummax()
     dd_serie = (equity_curve - pico) / pico * 100
@@ -325,7 +329,17 @@ def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series, trades: 
 # ===================================================================
 def rodar_oos_na_esteira(df_oos: pd.DataFrame, params_otimos: dict, estrategia: str, ativo: str, timeframe: str, tipo_oos: str, sufixo_ano: str, dir_saida: Path, param_id: str = "") -> dict:
     horas = df_oos.index.strftime("%H:%M")
-    janela_op = (df_oos.index.weekday >= 0) & (df_oos.index.weekday <= 4) & (horas >= HORA_INICIO_OP) & (horas <= HORA_FIM_OP)
+    janela_op = (
+        (df_oos.index.weekday >= 0) &
+        (df_oos.index.weekday <= 4) &
+        (horas >= HORA_INICIO_OP) &
+        (horas <= HORA_FIM_OP)
+    )
+    # NOTA: janela_op filtra apenas ENTRADAS de sinais.
+    # Os indicadores matemáticos devem ser calculados sobre
+    # a série completa (df_oos sem filtro), não sobre janela_op.
+    # Garantir que calcular_sinais aplica janela_op apenas na
+    # geração do sinal final, nunca nos cálculos de indicadores.
     
     cache = {}
     sinal, sl_pips, tp_pips = calcular_sinais(df_oos, params_otimos, janela_op, estrategia, cache)
@@ -334,7 +348,11 @@ def rodar_oos_na_esteira(df_oos: pd.DataFrame, params_otimos: dict, estrategia: 
     
     gerar_relatorio_e_graficos(metricas, equity_curve, trades, estrategia, ativo, timeframe, tipo_oos, sufixo_ano, dir_saida, param_id)
     
-    aprovado = metricas["fator_recup"] >= 0.2
+    aprovado = (
+        metricas["fator_recup"] >= 0.7 and
+        metricas["pnl_pct"] > 0.0 and
+        metricas["fator_lucro"] >= 1.0
+    )
     return {"aprovado": aprovado, "metricas": metricas}
 
 
