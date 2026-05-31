@@ -219,6 +219,10 @@ def main():
         pico_capital = 0.0
         capital = 0.0
         trades_count = 0
+        soma_ganhos = 0.0
+        soma_perdas = 0.0
+        win_count = 0
+        loss_count = 0
         trade_ativo_ate_indice = -1
         
         for i in entradas_idx:
@@ -281,6 +285,13 @@ def main():
             lucro_total_pips += pnl
             trades_count += 1
             
+            if pnl > 0:
+                soma_ganhos += pnl
+                win_count += 1
+            else:
+                soma_perdas += abs(pnl)
+                loss_count += 1
+            
             capital += pnl
             if capital > pico_capital:
                 pico_capital = capital
@@ -292,6 +303,12 @@ def main():
         
         if trades_count >= 60 and max_drawdown_pips > 0:
             ret_dd = lucro_total_pips / max_drawdown_pips
+            profit_factor = (soma_ganhos / soma_perdas) if soma_perdas > 0 else 99.0
+            win_rate = (win_count / trades_count) * 100.0 if trades_count > 0 else 0.0
+            avg_win = (soma_ganhos / win_count) if win_count > 0 else 0.0
+            avg_loss = (soma_perdas / loss_count) if loss_count > 0 else 0.0
+            payoff = (avg_win / avg_loss) if avg_loss > 0 else 99.0
+            
             resultados.append({
                 "excitacao_maxima": params["excitacao_maxima"],
                 "lambda_norm_min_sinal": params["lambda_norm_min_sinal"],
@@ -299,9 +316,12 @@ def main():
                 "mult_sl": params["multiplicador_sl"],
                 "mult_tp": params["multiplicador_tp"],
                 "Trades": trades_count,
+                "Win_Rate": round(win_rate, 2),
+                "Payoff": round(payoff, 2),
                 "Lucro_Total_Pips": round(lucro_total_pips, 1),
                 "Max_DD_Pips": round(max_drawdown_pips, 1),
-                "Ret_DD": round(ret_dd, 2)
+                "Ret_DD": round(ret_dd, 2),
+                "Profit_Factor": round(profit_factor, 2)
             })
             
     pbar.close()
@@ -311,32 +331,41 @@ def main():
         df_res = df_res.sort_values(by="Ret_DD", ascending=False).reset_index(drop=True)
         df_res.to_parquet(ARQUIVO_SAIDA)
         
-        # Salvar as Top 10 em JSON no formato exigido pela esteira
-        top10_list = []
-        for i, row in df_res.head(10).iterrows():
-            top10_list.append({
-                "id_parametro": f"HAWKES_{ativo.upper()}_{timeframe.upper()}_TOP{i+1}",
-                "excitacao_maxima": float(row["excitacao_maxima"]),
-                "lambda_norm_min_sinal": float(row["lambda_norm_min_sinal"]),
-                "lambda_norm_saida": float(row["lambda_norm_saida"]),
-                "mult_sl": float(row["mult_sl"]),
-                "mult_tp": float(row["mult_tp"]),
-                "Trades": int(row["Trades"]),
-                "Lucro_Total_Pips": float(row["Lucro_Total_Pips"]),
-                "Max_DD_Pips": float(row["Max_DD_Pips"]),
-                "Ret_DD": float(row["Ret_DD"])
-            })
+        # CSV Relatório Top 50
+        top50 = df_res.head(50)
+        dir_relatorios = DIR_SAIDA / "relatorios_top50"
+        os.makedirs(dir_relatorios, exist_ok=True)
+                # Exportar em PNG Elegante
+        ARQUIVO_PNG = dir_relatorios / "relatorio_top50_hawkes.png"
+        try:
+            from otimizacoes.export_utils import salvar_tabela_png
+        except ImportError:
+            import sys
+            from pathlib import Path
+            sys.path.append(str(Path(__file__).resolve().parent))
+            from export_utils import salvar_tabela_png
             
-        json_saida = DIR_SAIDA / "otimizacao_hawkes_top10.json"
+        salvar_tabela_png(top50, ARQUIVO_PNG, titulo="Top 50 Parametrizações - HAWKES")
+        
+        
+        # Salvar as Top 50 em JSON no formato de candidatos
+        top50_dicts = top50.to_dict(orient="records")
+        for i, p in enumerate(top50_dicts):
+            p["id_parametro"] = f"HAWKES_{ativo.upper()}_{timeframe.upper()}_TOP{i+1}"
+            
+        dir_candidatos = DIR_SAIDA / "candidatos_testes"
+        os.makedirs(dir_candidatos, exist_ok=True)
+        json_saida = dir_candidatos / "candidatos_hawkes.json"
         with open(json_saida, 'w') as f:
-            json.dump(top10_list, f, indent=4)
+            json.dump(top50_dicts, f, indent=4)
             
         print("\n================================================================================")
         print("TOP 10 PARAMETRIZAÇÕES HAWKES (RANKING POR RET/DD > 60 Trades):")
         print("================================================================================")
         print(df_res.head(10).to_string())
         print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
-        print(f"Top 10 JSON salvo em: {json_saida}")
+        print(f"Relatório Elegante PNG salvo em: {ARQUIVO_PNG}")
+        print(f"Candidatos JSON salvo em: {json_saida}")
     else:
         print("Nenhuma combinação atingiu os critérios mínimos (60 trades).")
 

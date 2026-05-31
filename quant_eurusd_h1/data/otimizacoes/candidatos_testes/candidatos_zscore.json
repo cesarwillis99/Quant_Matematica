@@ -1,0 +1,34 @@
+[
+    {
+        "janela_zscore": 100,
+        "janela_vol": 50,
+        "z_entry": 3.0,
+        "mult_sl": 2.5,
+        "mult_tp": 5.0,
+        "hurst_cut": 0.4,
+        "Trades": 297,
+        "Win_Rate": 35.02,
+        "Payoff": 1.88,
+        "Lucro_Total_Pips": 56.8,
+        "Max_DD_Pips": 1228.9,
+        "Ret_DD": 0.05,
+        "Profit_Factor": 1.01,
+        "id_parametro": "ZSCORE_EURUSD_H1_TOP1"
+    },
+    {
+        "janela_zscore": 100,
+        "janela_vol": 50,
+        "z_entry": 3.0,
+        "mult_sl": 2.5,
+        "mult_tp": 5.0,
+        "hurst_cut": 0.45,
+        "Trades": 297,
+        "Win_Rate": 35.02,
+        "Payoff": 1.88,
+        "Lucro_Total_Pips": 56.8,
+        "Max_DD_Pips": 1228.9,
+        "Ret_DD": 0.05,
+        "Profit_Factor": 1.01,
+        "id_parametro": "ZSCORE_EURUSD_H1_TOP2"
+    }
+]

@@ -160,7 +160,7 @@ def run_spread(params, ativo, timeframe, estrategia, param_id, df_ops, dir_saida
     csv_temp = os.path.join(especific_dir, f"temp_ops_{estrategia}.csv")
     df_ops.to_csv(csv_temp, index=False)
     
-    res = rodar_spread(csv_temp, f"{estrategia}_{param_id}", ativo, especific_dir, spread_original=1.2, spread_multiplo=1.5, pip_value_por_lot=10.0, max_degradacao=0.25)
+    res = rodar_spread(csv_temp, f"{estrategia}_{param_id}", ativo, especific_dir, spread_original=0.5, spread_multiplo=1.8, pip_value_por_lot=10.0, max_degradacao=0.25)
     if res and res.get('aprovado', False):
         return True
     return False
@@ -199,7 +199,7 @@ def run_wfa(params, ativo, timeframe, estrategia, param_id, df_ops, dir_saida, d
     os.makedirs(especific_dir, exist_ok=True)
     
     dir_data = DIR_PROJETO / f"quant_{ativo.lower()}_{timeframe.lower()}" / "data"
-    parquet_otim = dir_data / "otimizacoes" / f"otimizacao_{estrategia.lower()}_resultados.parquet"
+    parquet_otim = dir_data / "otimizacoes" / estrategia.lower() / f"otimizacao_{estrategia.lower()}_resultados.parquet"
     
     if df_comp is None or not parquet_otim.exists():
         logger.warning(f"WFA ignorado (dados incompletos).")
@@ -220,7 +220,10 @@ def run_permutacao(params, ativo, timeframe, estrategia, param_id, df_ops, dir_s
         logger.warning("DF completo não fornecido para Permutacao.")
         return True
         
-    meta_cols = {"id", "Trades", "Lucro_Total_Pips", "Max_DD_Pips", "Ret_DD", "Profit_Factor", "lucro", "drawdown"}
+    meta_cols = {
+        "id", "id_parametro", "Trades", "Lucro_Total_Pips", "Max_DD_Pips", 
+        "Ret_DD", "Profit_Factor", "lucro", "drawdown", "Win_Rate", "Payoff"
+    }
     params_filtrados = {k: v for k, v in params.items() if k not in meta_cols}
         
     res = rodar_permutacao_na_esteira(df_comp, params_filtrados, estrategia, ativo, timeframe, Path(especific_dir))
@@ -242,6 +245,7 @@ ESTEIRA_DEGRAUS = [
 
 def gerar_relatorio_eliminacao(historico: dict, estrategia: str, resultados_dir: Path):
     """Gera um PNG dark-mode mostrando o resultado de cada variação em cada degrau da esteira."""
+    os.makedirs(resultados_dir, exist_ok=True)
     degraus = [nome for nome, _ in ESTEIRA_DEGRAUS]
     variacoes = list(historico.keys())
 
@@ -377,7 +381,7 @@ def main():
     base_dir = DIR_PROJETO / f"quant_{ativo}_{timeframe}"
     data_dir = base_dir / "data"
     
-    parquet_otim = data_dir / "otimizacoes" / f"otimizacao_{estrategia.lower()}_resultados.parquet"
+    parquet_otim = data_dir / "otimizacoes" / estrategia.lower() / f"otimizacao_{estrategia.lower()}_resultados.parquet"
     
     if not parquet_otim.exists():
         logger.error(f"Arquivo de parâmetros não encontrado: {parquet_otim}")
@@ -388,8 +392,14 @@ def main():
     df_otim = df_otim[df_otim["Trades"] >= 60]
     if "Profit_Factor" in df_otim.columns and estrategia != "CURVATURA":
         df_otim = df_otim[df_otim["Profit_Factor"] >= 1.0]
-    df_otim = df_otim.sort_values("Ret_DD", ascending=False)
-    top_params_list = df_otim.head(10).to_dict(orient='records')
+    json_path = data_dir / "otimizacoes" / estrategia.lower() / f"otimizacao_{estrategia.lower()}_top10.json"
+    if json_path.exists():
+        with open(json_path, 'r') as f:
+            top_params_list = json.load(f)
+        logger.info(f"Carregado {len(top_params_list)} parametros do JSON customizado.")
+    else:
+        df_otim = df_otim.sort_values("Ret_DD", ascending=False)
+        top_params_list = df_otim.head(10).to_dict(orient='records')
         
     if args.force_all:
         logger.info("⚠️ Modo DEBUG ativo: Rodando apenas a variação TOP1 e forçando execução completa de todos os testes!")
@@ -449,7 +459,7 @@ def main():
             logger.info("🎯 10 variações aprovadas encontradas! Encerrando esteira.")
             break
             
-        param_id = param_set.get('id', f"{estrategia}_VAR{i+1}")
+        param_id = param_set.get('id', param_set.get('id_parametro', f"{estrategia}_VAR{i+1}"))
         logger.info(f"\n--- Processando Variação ID: {param_id} ({i+1}/{len(top_params_list)}) | Aprovadas: {aprovadas_count}/10 ---")
         
         # 1. Gerar Sinais com o Motor da Distribuição de Parâmetros
@@ -566,16 +576,23 @@ def main():
                 logger.info(f"✅ Variação ID {param_id} APROVADA em todos os {len(ESTEIRA_DEGRAUS)} testes de robustez!")
                 aprovadas_count += 1
                 
-            # Mover imagens e CSVs de resultados que passaram em todos os testes
-            dir_final_estrategia = resultados_dir / estrategia.lower()
-            os.makedirs(dir_final_estrategia, exist_ok=True)
-            mover_conteudo(str(dir_saida_temp), str(dir_final_estrategia))
+            # Mover imagens e CSVs de resultados que passaram para resumo_aprovadas
+            dir_aprovadas = resultados_dir / "resumo_aprovadas" / estrategia.lower() / param_id
+            os.makedirs(dir_aprovadas, exist_ok=True)
+            mover_conteudo(str(dir_saida_temp), str(dir_aprovadas))
+            
+            # Remover pasta temporária
+            import shutil
+            shutil.rmtree(dir_saida_temp, ignore_errors=True)
             
             # Adicionar aos sobreviventes
             sobreviventes.append(param_set)
         else:
-            logger.info(f"❌ Variação ID {param_id} REPROVADA. Relatórios descartados para manter a pasta de resultados 100% limpa.")
-            # Remove a pasta temp inteira
+            logger.info(f"❌ Variação ID {param_id} REPROVADA. Movendo imagens para resumo_eliminadas.")
+            dir_eliminadas = resultados_dir / "resumo_eliminadas" / estrategia.lower() / param_id
+            os.makedirs(dir_eliminadas, exist_ok=True)
+            # Move apenas os PNGs para não lotar de CSVs pesados
+            mover_conteudo(str(dir_saida_temp), str(dir_eliminadas), mover_apenas_imagens=True)
             import shutil
             shutil.rmtree(dir_saida_temp, ignore_errors=True)
             
@@ -589,7 +606,7 @@ def main():
         logger.info(f"Sobreviventes salvos em: {output_json}")
 
     # Gerar relatório PNG de eliminação
-    gerar_relatorio_eliminacao(historico_testes, estrategia, resultados_dir)
+    gerar_relatorio_eliminacao(historico_testes, estrategia, resultados_dir / estrategia.lower())
 
 if __name__ == "__main__":
     main()

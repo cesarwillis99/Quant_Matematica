@@ -135,7 +135,7 @@ def main():
     
     dir_projeto = Path(__file__).resolve().parent.parent
     dir_data = dir_projeto / f"quant_{ativo}_{timeframe}" / "data"
-    dir_saida = dir_data / "otimizacoes"
+    dir_saida = dir_data / "otimizacoes" / "ou"
     os.makedirs(dir_saida, exist_ok=True)
     
     parquet_completo = dir_data / f"{ativo}_{timeframe}_completo.parquet"
@@ -202,6 +202,10 @@ def main():
             pico_capital = 0.0
             capital = 0.0
             trades_count = 0
+            soma_ganhos = 0.0
+            soma_perdas = 0.0
+            win_count = 0
+            loss_count = 0
             
             trade_ativo_ate_indice = -1
             
@@ -263,6 +267,13 @@ def main():
                 lucro_total_pips += pnl
                 trades_count += 1
                 
+                if pnl > 0:
+                    soma_ganhos += pnl
+                    win_count += 1
+                else:
+                    soma_perdas += abs(pnl)
+                    loss_count += 1
+                
                 capital += pnl
                 if capital > pico_capital:
                     pico_capital = capital
@@ -274,6 +285,11 @@ def main():
             
             if trades_count >= 60 and max_drawdown_pips > 0:
                 ret_dd = lucro_total_pips / max_drawdown_pips
+                profit_factor = (soma_ganhos / soma_perdas) if soma_perdas > 0 else 99.0
+                win_rate = (win_count / trades_count) * 100.0 if trades_count > 0 else 0.0
+                avg_win = (soma_ganhos / win_count) if win_count > 0 else 0.0
+                avg_loss = (soma_perdas / loss_count) if loss_count > 0 else 0.0
+                payoff = (avg_win / avg_loss) if avg_loss > 0 else 99.0
                 
                 resultados.append({
                     "janela_ou": janela_ou,
@@ -282,9 +298,12 @@ def main():
                     "mult_sl": params["multiplicador_sl"],
                     "mult_tp": params["multiplicador_tp"],
                     "Trades": trades_count,
+                    "Win_Rate": round(win_rate, 2),
+                    "Payoff": round(payoff, 2),
                     "Lucro_Total_Pips": round(lucro_total_pips, 1),
                     "Max_DD_Pips": round(max_drawdown_pips, 1),
-                    "Ret_DD": round(ret_dd, 2)
+                    "Ret_DD": round(ret_dd, 2),
+                    "Profit_Factor": round(profit_factor, 2)
                 })
                 
         pbar.close()
@@ -297,29 +316,37 @@ def main():
         print("TOP 10 PARAMETRIZAÇÕES (RANKING POR RET/DD > 60 Trades):")
         print("================================================================================")
         print(df_res.head(10).to_string())
-        print(f"\nResultados salvos em: {arquivo_saida}")
         
-        # Exportar arquivo JSON top10 para consumo do pipeline
-        top_10 = df_res.head(10)
-        top10_list = []
-        for idx, row in top_10.iterrows():
-            params_dict = {
-                "id_parametro": f"OU_{ativo.upper()}_{timeframe.upper()}_TOP{idx+1}",
-                "janela_ou": int(row["janela_ou"]),
-                "halflife_max": float(row["halflife_max"]),
-                "zscore_threshold": float(row["zscore_threshold"]),
-                "mult_sl": float(row["mult_sl"]),
-                "mult_tp": float(row["mult_tp"]),
-                "Trades": int(row["Trades"]),
-                "Lucro_Total_Pips": float(row["Lucro_Total_Pips"]),
-                "Max_DD_Pips": float(row["Max_DD_Pips"]),
-                "Ret_DD": float(row["Ret_DD"])
-            }
-            top10_list.append(params_dict)
+        top50 = df_res.head(50)
+        dir_relatorios = dir_saida / "relatorios_top50"
+        os.makedirs(dir_relatorios, exist_ok=True)
+                # Exportar em PNG Elegante
+        ARQUIVO_PNG = dir_relatorios / f"relatorio_top50_{estrategia_nome.lower()}.png"
+        try:
+            from otimizacoes.export_utils import salvar_tabela_png
+        except ImportError:
+            import sys
+            from pathlib import Path
+            sys.path.append(str(Path(__file__).resolve().parent))
+            from export_utils import salvar_tabela_png
             
-        with open(arquivo_json, 'w') as f:
-            json.dump(top10_list, f, indent=4)
-        print(f"TOP 10 JSON salvo em: {arquivo_json}")
+        salvar_tabela_png(top50, ARQUIVO_PNG, titulo=f"Top 50 Parametrizações - {estrategia_nome.upper()}")
+        
+        
+        # Exportar arquivo JSON top50 para consumo do script
+        top50_dicts = top50.to_dict(orient="records")
+        for idx, row in enumerate(top50_dicts):
+            row["id_parametro"] = f"OU_{ativo.upper()}_{timeframe.upper()}_TOP{idx+1}"
+            
+        dir_candidatos = dir_saida / "candidatos_testes"
+        os.makedirs(dir_candidatos, exist_ok=True)
+        arquivo_json_candidatos = dir_candidatos / "candidatos_ou.json"
+        with open(arquivo_json_candidatos, 'w') as f:
+            json.dump(top50_dicts, f, indent=4)
+            
+        print(f"\nResultados salvos em: {arquivo_saida}")
+        print(f"Relatório Elegante PNG salvo em: {ARQUIVO_PNG}")
+        print(f"Candidatos JSON salvo em: {arquivo_json_candidatos}")
     else:
         print("Nenhuma combinação atingiu os critérios mínimos (60 trades).")
 

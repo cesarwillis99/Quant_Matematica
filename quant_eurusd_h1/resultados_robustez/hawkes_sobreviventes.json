@@ -1,0 +1,47 @@
+[
+    {
+        "excitacao_maxima": 0.75,
+        "lambda_norm_min_sinal": 3.0,
+        "lambda_norm_saida": 0.5,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 174,
+        "Win_Rate": 61.49,
+        "Payoff": 1.02,
+        "Lucro_Total_Pips": 575.3,
+        "Max_DD_Pips": 111.5,
+        "Ret_DD": 5.16,
+        "Profit_Factor": 1.63,
+        "id_parametro": "HAWKES_EURUSD_H1_TOP1"
+    },
+    {
+        "excitacao_maxima": 0.65,
+        "lambda_norm_min_sinal": 3.0,
+        "lambda_norm_saida": 0.6,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 173,
+        "Win_Rate": 61.85,
+        "Payoff": 0.99,
+        "Lucro_Total_Pips": 545.1,
+        "Max_DD_Pips": 107.8,
+        "Ret_DD": 5.06,
+        "Profit_Factor": 1.61,
+        "id_parametro": "HAWKES_EURUSD_H1_TOP3"
+    },
+    {
+        "excitacao_maxima": 0.65,
+        "lambda_norm_min_sinal": 3.0,
+        "lambda_norm_saida": 0.3,
+        "mult_sl": 2.5,
+        "mult_tp": 2.0,
+        "Trades": 173,
+        "Win_Rate": 59.54,
+        "Payoff": 1.04,
+        "Lucro_Total_Pips": 502.7,
+        "Max_DD_Pips": 105.8,
+        "Ret_DD": 4.75,
+        "Profit_Factor": 1.53,
+        "id_parametro": "HAWKES_EURUSD_H1_TOP8"
+    }
+]

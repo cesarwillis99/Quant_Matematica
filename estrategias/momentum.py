@@ -40,7 +40,7 @@ DIR_GRAFICOS   = DIR_PROJETO / "graficos"
 PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
 PARQUET_HURST       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet"
-PARQUET_SAIDA       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_momentum.parquet"
+PARQUET_SAIDA       = DIR_DATA / "momentum" / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_momentum.parquet"
 CAMINHO_GRAFICO     = DIR_GRAFICOS / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_momentum_sinais.png"
 
 # ================================================
@@ -460,6 +460,7 @@ def processar_pipeline_momentum(forcar: bool = False) -> pd.DataFrame:
 
     # Salvar cache Parquet
     logger.info(f"Salvando resultados no cache: {PARQUET_SAIDA.name}")
+    PARQUET_SAIDA.parent.mkdir(parents=True, exist_ok=True)
     df_final.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy", index=True)
 
     # Passo 5: Gerar gráfico de sinais e relatório

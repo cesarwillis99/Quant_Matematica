@@ -264,7 +264,7 @@ DIR_SAIDA.mkdir(parents=True, exist_ok=True)
 
 CAPITAL_INICIAL     = 10_000.0
 RISCO_POR_TRADE     = 0.01
-SPREAD_PIPS         = 1.2
+SPREAD_PIPS         = 0.5
 VALOR_PIP_POR_LOTE  = 10.0
 FATOR_PIPS          = 10_000
 

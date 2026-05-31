@@ -89,7 +89,7 @@ def carregar_params_top1(estrategia: str) -> dict:
     o dicionario de parametros da linha Top1 (Ret_DD mais alto).
     """
     dir_otim = Path(__file__).resolve().parent.parent.parent / \
-        f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data" / "otimizacoes"
+        f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data" / "otimizacoes" / estrategia.lower()
 
     nome_arquivo = f"otimizacao_{estrategia.lower()}_resultados.parquet"
     caminho = dir_otim / nome_arquivo
@@ -332,6 +332,7 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             cache["hawkes_valido"]      = val_h == 1
             cache["hawkes_R_t"]         = R_t
             cache["hawkes_mask_op"]     = df_comp.index.isin(df_op.index)
+            cache["hawkes_opens"]       = df_comp["Open"].values
             cache["hawkes_closes"]      = closes_h
             cache["hawkes_highs"]       = df_comp["High"].values
             cache["hawkes_lows"]        = df_comp["Low"].values
@@ -350,9 +351,10 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         excit_ok  = exc < params["excitacao_maxima"]
         norm_high = lam_norm > params["lambda_norm_min_sinal"]
         
-        # Injetando saída neutra dinamicamente no cache
-        lam_norm_saida = params.get("lambda_norm_saida", 0.6)
-        cache["saida_neutra"] = lam_norm < lam_norm_saida
+        # Injetando saída neutra dinamicamente no cache desativada para Hawkes
+        # (Alinhamento com o backtest oficial da esteira que opera estritamente em SL/TP)
+        # lam_norm_saida = params.get("lambda_norm_saida", 0.6)
+        # cache["saida_neutra"] = lam_norm < lam_norm_saida
         
         cond_base = valido & excit_ok & mask_op & norm_falling & norm_high
 
@@ -380,6 +382,7 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             if "ou_mask_op" not in cache:
                 df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
                 cache["ou_mask_op"] = df_comp.index.isin(df_op.index)
+                cache["ou_opens"]   = df_comp["Open"].values
                 cache["ou_closes"] = df_comp["Close"].values
                 cache["ou_highs"]  = df_comp["High"].values
                 cache["ou_lows"]   = df_comp["Low"].values
@@ -421,6 +424,7 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             if "our_mask_op" not in cache:
                 df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
                 cache["our_mask_op"] = df_comp.index.isin(df_op.index)
+                cache["our_opens"]   = df_comp["Open"].values
                 cache["our_closes"] = df_comp["Close"].values
                 cache["our_highs"]  = df_comp["High"].values
                 cache["our_lows"]   = df_comp["Low"].values
@@ -469,6 +473,7 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             if "pca_mask_op" not in cache:
                 df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
                 cache["pca_mask_op"] = df_comp.index.isin(df_op.index)
+                cache["pca_opens"]   = df_comp["Open"].values
                 cache["pca_closes"] = cl
                 cache["pca_n"] = len(df_comp)
                 vr_p = pd.Series(lr_p).rolling(50, min_periods=50).std(ddof=1).values
@@ -531,6 +536,7 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             cache["wav_S22_raw"] = potencia[1]
 
             cache["wav_mask_op"] = df_comp.index.isin(df_op.index)
+            cache["wav_opens"]   = df_comp["Open"].values
             cache["wav_closes"]  = cl
             cache["wav_n"]       = n_w
             vr_w = pd.Series(lr_w).rolling(50, min_periods=50).std(ddof=1).values
@@ -715,7 +721,7 @@ def rodar_backtest(df: pd.DataFrame, sinal: np.ndarray,
             "PCA": "pca", "WAVELET": "wav"
         }
         pfx = prefix_map[estrategia]
-        opens  = cache.get(f"{pfx}_closes", df["Close"].values)  # Usa close como proxy
+        opens  = cache.get(f"{pfx}_opens", df["Open"].values)  # Usar Open real
         highs  = cache.get(f"{pfx}_highs", df["High"].values)
         lows   = cache.get(f"{pfx}_lows", df["Low"].values)
         closes = cache.get(f"{pfx}_closes", df["Close"].values)
@@ -1249,7 +1255,10 @@ def rodar_distribuicao_na_esteira(df: pd.DataFrame, params: dict, estrategia: st
     dir_saida_path.mkdir(parents=True, exist_ok=True)
     
     # Filtrar parametros extras/metadados
-    meta_cols = {"id", "Trades", "Lucro_Total_Pips", "Max_DD_Pips", "Ret_DD", "Profit_Factor", "lucro", "drawdown"}
+    meta_cols = {
+        "id", "id_parametro", "Trades", "Lucro_Total_Pips", "Max_DD_Pips", 
+        "Ret_DD", "Profit_Factor", "lucro", "drawdown", "Win_Rate", "Payoff"
+    }
     params_filtrados = {k: v for k, v in params.items() if k not in meta_cols}
     
     # Configurar janela_op

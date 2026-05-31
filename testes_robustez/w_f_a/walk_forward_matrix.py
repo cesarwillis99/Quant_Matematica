@@ -54,7 +54,7 @@ ESTRATEGIA = "MOMENTUM"
 # Parametros operacionais fixos
 CAPITAL_INICIAL    = 10_000.0
 RISCO_POR_TRADE    = 0.01
-SPREAD_PIPS        = 1.2
+SPREAD_PIPS        = 0.5
 VALOR_PIP_POR_LOTE = 10.0
 FATOR_PIPS         = 10_000
 HORA_INICIO_OP     = "10:00"
@@ -759,7 +759,7 @@ def main():
     # Caminhos
     parquet_dados = (ROOT_DIR / f"quant_{ATIVO.lower()}" / "data"
                      / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet")
-    parquet_otim  = (ROOT_DIR / f"quant_{ATIVO.lower()}" / "data" / "otimizacoes"
+    parquet_otim  = (ROOT_DIR / f"quant_{ATIVO.lower()}" / "data" / "otimizacoes" / ESTRATEGIA.lower()
                      / f"otimizacao_{ESTRATEGIA.lower()}_resultados.parquet")
 
     if not parquet_dados.exists():

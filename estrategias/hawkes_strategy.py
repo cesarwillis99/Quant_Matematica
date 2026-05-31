@@ -41,7 +41,7 @@ DIR_GRAFICOS   = DIR_PROJETO / "graficos"
 PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
 PARQUET_HURST       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet"
-PARQUET_SAIDA       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hawkes.parquet"
+PARQUET_SAIDA       = DIR_DATA / "hawkes" / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hawkes.parquet"
 CAMINHO_GRAFICO     = DIR_GRAFICOS / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hawkes_sinais.png"
 
 # ================================================
@@ -316,7 +316,8 @@ def executar_pipeline_hawkes():
     df.drop(columns=["R_t", "VR"], inplace=True)
     
     # ── PARTE 7: Parquet de Saída ──
-    df.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy")
+    PARQUET_SAIDA.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy")
     logger.info(f"Parquet gerado com sucesso: {PARQUET_SAIDA.name}")
     
     # ── PARTE 8: Plotagem (4 Painéis) ──

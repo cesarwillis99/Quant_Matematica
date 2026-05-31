@@ -41,7 +41,7 @@ DIR_GRAFICOS   = DIR_PROJETO / "graficos"
 PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
 PARQUET_HURST       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet"
-PARQUET_SAIDA       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_pca.parquet"
+PARQUET_SAIDA       = DIR_DATA / "pca" / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_pca.parquet"
 CAMINHO_GRAFICO     = DIR_GRAFICOS / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_pca_sinais.png"
 
 # ================================================
@@ -247,7 +247,8 @@ def executar_pipeline_pca():
     df.drop(columns=colunas_drop, inplace=True)
     
     # ── PARTE 5: Parquet de Saída ──
-    df.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy")
+    PARQUET_SAIDA.parent.mkdir(parents=True, exist_ok=True)
+        df.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy")
     logger.info(f"Parquet salvo com sucesso em: {PARQUET_SAIDA}")
     
     # ── PARTE 6: Plotagem ──

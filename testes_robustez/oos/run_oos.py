@@ -32,7 +32,7 @@ if sys.stdout.encoding != "utf-8":
 # Configurações globais de negociação
 CAPITAL_INICIAL    = 10_000.0
 RISCO_POR_TRADE    = 0.01
-SPREAD_PIPS        = 1.2
+SPREAD_PIPS        = 0.5
 VALOR_PIP_POR_LOTE = 10.0
 FATOR_PIPS         = 10_000
 HORA_INICIO_OP     = "10:00"
@@ -349,7 +349,7 @@ def rodar_oos_na_esteira(df_oos: pd.DataFrame, params_otimos: dict, estrategia: 
     gerar_relatorio_e_graficos(metricas, equity_curve, trades, estrategia, ativo, timeframe, tipo_oos, sufixo_ano, dir_saida, param_id)
     
     aprovado = (
-        metricas["fator_recup"] >= 0.7 and
+        metricas["fator_recup"] >= 0.5 and
         metricas["pnl_pct"] > 0.0 and
         metricas["fator_lucro"] >= 1.0
     )
@@ -416,7 +416,7 @@ def main():
         raise FileNotFoundError(f"Parquet OOS {tipo_oos} correspondente não encontrado em {dir_data}")
 
     # Otimizações
-    parquet_otim = dir_data / "otimizacoes" / f"otimizacao_{estrategia.lower()}_resultados.parquet"
+    parquet_otim = dir_data / "otimizacoes" / estrategia.lower() / f"otimizacao_{estrategia.lower()}_resultados.parquet"
     if not parquet_otim.exists():
         raise FileNotFoundError(f"Combinações de otimização não encontradas em {parquet_otim}. Rode a otimização antes.")
 

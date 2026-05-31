@@ -39,7 +39,7 @@ DIR_GRAFICOS   = DIR_PROJETO / "graficos"
 PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
 PARQUET_HURST       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet"
-PARQUET_SAIDA       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_zscore.parquet"
+PARQUET_SAIDA       = DIR_DATA / "zscore" / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_zscore.parquet"
 CAMINHO_GRAFICO     = DIR_GRAFICOS / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_zscore_sinais.png"
 
 # ================================================
@@ -403,6 +403,7 @@ def processar_pipeline_zscore(forcar: bool = False) -> pd.DataFrame:
 
     # Salvar cache
     logger.info(f"Salvando resultados no cache: {PARQUET_SAIDA.name}")
+    PARQUET_SAIDA.parent.mkdir(parents=True, exist_ok=True)
     df_final.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy", index=True)
 
     # Passo 5-6: Gerar gráfico e relatório

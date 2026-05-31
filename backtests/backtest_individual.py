@@ -75,9 +75,9 @@ DIR_PROJETO_V2 = DIR_ATUAL
 DIR_PROJETO_V1 = DIR_ATUAL.parent / "quant_eurusd"
 
 # Parquets de Entrada (Sempre lidos de V2)
-PARQUET_ZSCORE   = DIR_PROJETO_V2 / "data" / "eurusd_h1_zscore.parquet"
-PARQUET_MOMENTUM = DIR_PROJETO_V2 / "data" / "eurusd_h1_momentum.parquet"
-PARQUET_OU       = DIR_PROJETO_V2 / "data" / "eurusd_h1_ou.parquet"
+PARQUET_ZSCORE   = DIR_PROJETO_V2 / "data" / "zscore" / "eurusd_h1_zscore.parquet"
+PARQUET_MOMENTUM = DIR_PROJETO_V2 / "data" / "momentum" / "eurusd_h1_momentum.parquet"
+PARQUET_OU       = DIR_PROJETO_V2 / "data" / "ou" / "eurusd_h1_ou.parquet"
 
 # Parâmetros de Simulação
 CAPITAL_INICIAL    = 10_000.0   # USD

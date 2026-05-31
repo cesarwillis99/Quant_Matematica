@@ -41,7 +41,7 @@ DIR_GRAFICOS   = DIR_PROJETO / "graficos"
 PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
 PARQUET_HURST       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet"
-PARQUET_SAIDA       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_ou_reverso.parquet"
+PARQUET_SAIDA       = DIR_DATA / "ou_reverso" / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_ou_reverso.parquet"
 CAMINHO_GRAFICO     = DIR_GRAFICOS / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_ou_reverso_sinais.png"
 
 # ================================================
@@ -689,6 +689,7 @@ def processar_pipeline_ou(forcar: bool = False) -> pd.DataFrame:
     
     # Salvar cache
     logger.info(f"Salvando base final com indicadores OU em: {PARQUET_SAIDA.name}")
+    PARQUET_SAIDA.parent.mkdir(parents=True, exist_ok=True)
     df_final.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy", index=True)
     
     # 4. Gráfico e Relatório

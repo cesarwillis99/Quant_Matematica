@@ -178,6 +178,8 @@ def main():
             trades_count = 0
             soma_ganhos = 0.0
             soma_perdas = 0.0
+            win_count = 0
+            loss_count = 0
             
             trade_ativo_ate_indice = -1
             
@@ -235,8 +237,10 @@ def main():
                 
                 if pnl > 0:
                     soma_ganhos += pnl
+                    win_count += 1
                 else:
                     soma_perdas += abs(pnl)
+                    loss_count += 1
                     
                 capital += pnl
                 if capital > pico_capital:
@@ -250,6 +254,10 @@ def main():
             if trades_count >= 30 and max_drawdown_pips > 0:
                 ret_dd = lucro_total_pips / max_drawdown_pips
                 profit_factor = (soma_ganhos / soma_perdas) if soma_perdas > 0 else 99.0
+                win_rate = (win_count / trades_count) * 100.0 if trades_count > 0 else 0.0
+                avg_win = (soma_ganhos / win_count) if win_count > 0 else 0.0
+                avg_loss = (soma_perdas / loss_count) if loss_count > 0 else 0.0
+                payoff = (avg_win / avg_loss) if avg_loss > 0 else 99.0
                 
                 resultados.append({
                     "janela_pca": janela_pca,
@@ -258,6 +266,8 @@ def main():
                     "mult_sl": params["multiplicador_sl"],
                     "mult_tp": params["multiplicador_tp"],
                     "Trades": trades_count,
+                    "Win_Rate": round(win_rate, 2),
+                    "Payoff": round(payoff, 2),
                     "Lucro_Total_Pips": round(lucro_total_pips, 1),
                     "Max_DD_Pips": round(max_drawdown_pips, 1),
                     "Ret_DD": round(ret_dd, 2),
@@ -276,18 +286,30 @@ def main():
         if len(df_res) > 0:
             df_res.to_parquet(ARQUIVO_SAIDA)
 
-            top10 = df_res.head(10).to_dict(orient="records")
-            for i, p in enumerate(top10):
+            top50 = df_res.head(50)
+            
+            dir_relatorios = DIR_SAIDA / "relatorios_top50"
+            os.makedirs(dir_relatorios, exist_ok=True)
+            ARQUIVO_CSV = dir_relatorios / f"relatorio_top50_{estrategia_nome.lower()}.csv"
+            top50.to_csv(ARQUIVO_CSV, index=False)
+            
+            top50_dicts = top50.to_dict(orient="records")
+            for i, p in enumerate(top50_dicts):
                 p["id_parametro"] = f"PCA_{ATIVO}_{TIMEFRAME}_TOP{i+1}"
 
-            with open(ARQUIVO_JSON, 'w') as f:
-                json.dump(top10, f, indent=4)
+            dir_candidatos = DIR_SAIDA / "candidatos_testes"
+            os.makedirs(dir_candidatos, exist_ok=True)
+            ARQUIVO_JSON_CANDIDATOS = dir_candidatos / f"candidatos_{estrategia_nome.lower()}.json"
+            with open(ARQUIVO_JSON_CANDIDATOS, 'w') as f:
+                json.dump(top50_dicts, f, indent=4)
 
             print("\n================================================================================")
             print("TOP 10 PARAMETRIZACOES SOBREVIVENTES (RANKING POR RET/DD):")
             print("================================================================================")
             print(df_res.head(10).to_string())
-            print(f"\nResultados salvos em: {ARQUIVO_SAIDA} e {ARQUIVO_JSON}")
+            print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
+            print(f"Relatório Elegante PNG salvo em: {ARQUIVO_PNG}")
+            print(f"Candidatos JSON salvo em: {ARQUIVO_JSON_CANDIDATOS}")
         else:
             print("Nenhuma combinacao sobreviveu aos criterios rigorosos (Min 60 Trades, F.R > 1.0).")
     else:

@@ -40,7 +40,7 @@ DIR_GRAFICOS   = DIR_PROJETO / "graficos"
 PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
 PARQUET_HURST       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet"
-PARQUET_SAIDA       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_curvatura.parquet"
+PARQUET_SAIDA       = DIR_DATA / "curvatura" / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_curvatura.parquet"
 CAMINHO_GRAFICO     = DIR_GRAFICOS / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_curvatura_sinais.png"
 
 # ================================================
@@ -391,6 +391,7 @@ def main():
         cols_float = [c for c in df.columns if c.startswith("curv_") and df[c].dtype == "float64"]
         if cols_float:
             df[cols_float] = df[cols_float].astype(np.float32)
+        PARQUET_SAIDA.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(PARQUET_SAIDA, index=True)
         logger.info(f"Parquet gerado com sucesso: {PARQUET_SAIDA.name}")
         

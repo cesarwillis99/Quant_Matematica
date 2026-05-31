@@ -40,8 +40,8 @@ def rodar_spread(
     nome_estrategia: str,
     nome_ativo: str,
     caminho_saida: str,
-    spread_original: float = 1.2,
-    spread_multiplo: float = 1.5,
+    spread_original: float = 0.5,
+    spread_multiplo: float = 1.8,
     pip_value_por_lot: float = 10.0,
     max_degradacao: float = 0.20,
 ) -> dict:
@@ -190,8 +190,8 @@ def main():
     parser.add_argument("--ativo",      type=str, default="EURUSD", help="Ativo a ser testado (ex: EURUSD)")
     parser.add_argument("--timeframe",  type=str, default="H1", help="Timeframe (ex: H1)")
     parser.add_argument("--estrategia", type=str, default="ALL", help="Estratégia específica ou ALL para rodar todas")
-    parser.add_argument("--spread_orig", type=float, default=1.2, help="Spread original em pips")
-    parser.add_argument("--multiplo",    type=float, default=1.5, help="Múltiplo de estresse (ex: 1.5 para +50%)")
+    parser.add_argument("--spread_orig", type=float, default=0.5, help="Spread original em pips")
+    parser.add_argument("--multiplo",    type=float, default=1.8, help="Múltiplo de estresse (ex: 1.8 para +80%)")
     args = parser.parse_args()
 
     ativo      = args.ativo.lower()

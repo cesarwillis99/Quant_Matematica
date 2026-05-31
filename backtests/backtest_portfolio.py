@@ -75,12 +75,12 @@ DIR_PROJETO_V2 = DIR_ATUAL
 DIR_PROJETO_V1 = DIR_ATUAL.parent / "quant_eurusd"
 
 # Parquets de Entrada (Sempre lidos de V2)
-PARQUET_ZSCORE   = DIR_PROJETO_V2 / "data" / "eurusd_h1_zscore.parquet"
-PARQUET_MOMENTUM = DIR_PROJETO_V2 / "data" / "eurusd_h1_momentum.parquet"
-PARQUET_HAWKES       = DIR_PROJETO_V2 / "data" / "eurusd_h1_hawkes.parquet"
-PARQUET_OU_REVERSO   = DIR_PROJETO_V2 / "data" / "eurusd_h1_ou_reverso.parquet"
-PARQUET_WAVELET      = DIR_PROJETO_V2 / "data" / "eurusd_h1_wavelet.parquet"
-PARQUET_PCA          = DIR_PROJETO_V2 / "data" / "eurusd_h1_pca.parquet"
+PARQUET_ZSCORE   = DIR_PROJETO_V2 / "data" / "zscore" / "eurusd_h1_zscore.parquet"
+PARQUET_MOMENTUM = DIR_PROJETO_V2 / "data" / "momentum" / "eurusd_h1_momentum.parquet"
+PARQUET_HAWKES       = DIR_PROJETO_V2 / "data" / "hawkes" / "eurusd_h1_hawkes.parquet"
+PARQUET_OU_REVERSO   = DIR_PROJETO_V2 / "data" / "ou_reverso" / "eurusd_h1_ou_reverso.parquet"
+PARQUET_WAVELET      = DIR_PROJETO_V2 / "data" / "wavelet" / "eurusd_h1_wavelet.parquet"
+PARQUET_PCA          = DIR_PROJETO_V2 / "data" / "pca" / "eurusd_h1_pca.parquet"
 
 # Parâmetros de Simulação
 CAPITAL_INICIAL    = 10_000.0   # USD

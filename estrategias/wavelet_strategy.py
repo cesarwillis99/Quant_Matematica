@@ -41,7 +41,7 @@ DIR_GRAFICOS   = DIR_PROJETO / "graficos"
 PARQUET_COMPLETO    = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
 PARQUET_HURST       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_hurst.parquet"
-PARQUET_SAIDA       = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_wavelet.parquet"
+PARQUET_SAIDA       = DIR_DATA / "wavelet" / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_wavelet.parquet"
 CAMINHO_GRAFICO     = DIR_GRAFICOS / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_wavelet_sinais.png"
 
 # ================================================
@@ -342,6 +342,7 @@ def main():
         df["sl_pips"] = df["sl_pips"].astype(np.float32)
         df["tp_pips"] = df["tp_pips"].astype(np.float32)
         
+        PARQUET_SAIDA.parent.mkdir(parents=True, exist_ok=True)
         df.to_parquet(PARQUET_SAIDA, index=True)
         logger.info(f"Parquet gerado com sucesso: {PARQUET_SAIDA.name}")
         

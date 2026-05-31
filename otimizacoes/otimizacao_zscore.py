@@ -22,7 +22,7 @@ estrategia_nome = Path(__file__).stem.replace('otimizacao_', '')
 
 DIR_PROJETO = Path(__file__).resolve().parent.parent
 DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
-DIR_OUT     = DIR_DATA / "otimizacoes"
+DIR_OUT     = DIR_DATA / "otimizacoes" / estrategia_nome
 
 PARQUET_COMPLETO    = DIR_DATA / f"{ativo}_{timeframe}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ativo}_{timeframe}_operacional.parquet"
@@ -212,7 +212,17 @@ def main():
         ganhos = pnls_arr[pnls_arr > 0]
         perdas = np.abs(pnls_arr[pnls_arr < 0])
         sum_perdas = perdas.sum()
-        pf = ganhos.sum() / sum_perdas if sum_perdas > 0 else 99.0
+        sum_ganhos = ganhos.sum()
+        pf = sum_ganhos / sum_perdas if sum_perdas > 0 else 99.0
+        
+        win_count = len(ganhos)
+        loss_count = len(perdas)
+        trades_count = len(pnls)
+        
+        win_rate = (win_count / trades_count) * 100.0 if trades_count > 0 else 0.0
+        avg_win = (sum_ganhos / win_count) if win_count > 0 else 0.0
+        avg_loss = (sum_perdas / loss_count) if loss_count > 0 else 0.0
+        payoff = (avg_win / avg_loss) if avg_loss > 0 else 99.0
 
         resultados.append({
             "janela_zscore": j_z,
@@ -221,7 +231,9 @@ def main():
             "mult_sl": m_sl,
             "mult_tp": m_tp,
             "hurst_cut": h_cut,
-            "Trades": len(pnls),
+            "Trades": trades_count,
+            "Win_Rate": round(win_rate, 2),
+            "Payoff": round(payoff, 2),
             "Lucro_Total_Pips": round(lucro_total, 1),
             "Max_DD_Pips": round(max_dd, 1),
             "Ret_DD": round(ret_dd, 2),
@@ -234,25 +246,44 @@ def main():
     if resultados:
         df_res = pd.DataFrame(resultados)
         # Filtro de Sobrevivencia (Trades >= 60 e F.R. > 1.0)
-        mask_survivor = (df_res["Trades"] >= 60) & (df_res["Profit_Factor"] > 1.0)
+        mask_survivor = (df_res["Trades"] >= 60) & (df_res["Ret_DD"] > 1.0)
         df_res = df_res[mask_survivor]
         df_res = df_res.sort_values(by="Ret_DD", ascending=False).reset_index(drop=True)
 
         if len(df_res) > 0:
             df_res.to_parquet(ARQUIVO_SAIDA)
 
-            top10 = df_res.head(10).to_dict(orient="records")
-            for i, p in enumerate(top10):
+            top50 = df_res.head(50)
+            
+            dir_relatorios = DIR_OUT / "relatorios_top50"
+            os.makedirs(dir_relatorios, exist_ok=True)
+            ARQUIVO_PNG = dir_relatorios / f"relatorio_top50_{estrategia_nome.lower()}.png"
+            try:
+                from otimizacoes.export_utils import salvar_tabela_png
+            except ImportError:
+                import sys
+                from pathlib import Path
+                sys.path.append(str(Path(__file__).resolve().parent))
+                from export_utils import salvar_tabela_png
+            salvar_tabela_png(top50, ARQUIVO_PNG, titulo=f"Top 50 Parametrizações - {estrategia_nome.upper()}")
+            
+            top50_dicts = top50.to_dict(orient="records")
+            for i, p in enumerate(top50_dicts):
                 p["id_parametro"] = f"{estrategia_nome.upper()}_{ativo.upper()}_{timeframe.upper()}_TOP{i+1}"
 
-            with open(ARQUIVO_JSON, 'w') as f:
-                json.dump(top10, f, indent=4)
+            dir_candidatos = DIR_OUT / "candidatos_testes"
+            os.makedirs(dir_candidatos, exist_ok=True)
+            ARQUIVO_JSON_CANDIDATOS = dir_candidatos / f"candidatos_{estrategia_nome.lower()}.json"
+            with open(ARQUIVO_JSON_CANDIDATOS, 'w') as f:
+                json.dump(top50_dicts, f, indent=4)
 
             print("\n" + "="*80)
             print("TOP 10 PARAMETRIZACOES SOBREVIVENTES (RANKING POR RET/DD):")
             print("="*80)
             print(df_res.head(10).to_string())
-            print(f"\nResultados salvos em: {ARQUIVO_SAIDA} e {ARQUIVO_JSON}")
+            print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
+            print(f"Relatório Elegante PNG salvo em: {ARQUIVO_PNG}")
+            print(f"Candidatos JSON salvo em: {ARQUIVO_JSON_CANDIDATOS}")
         else:
             print("Nenhuma combinacao sobreviveu aos criterios rigorosos (Min 60 Trades, F.R > 1.0).")
     else:

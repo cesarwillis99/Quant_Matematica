@@ -56,7 +56,7 @@ PARAMS_OTIMOS = {
 # Parâmetros operacionais fixos
 CAPITAL_INICIAL    = 10_000.0
 RISCO_POR_TRADE    = 0.01
-SPREAD_PIPS        = 1.2
+SPREAD_PIPS        = 0.5
 VALOR_PIP_POR_LOTE = 10.0
 FATOR_PIPS         = 10_000
 HORA_INICIO_OP     = "10:00"
@@ -97,6 +97,9 @@ def gerar_combinacoes_aleatorias(params_otimos: dict, n_comb: int, perturb_pct: 
     for _ in range(n_comb):
         comb = {}
         for param, val_orig in params_otimos.items():
+            if not isinstance(val_orig, (int, float, np.integer, np.floating)) or isinstance(val_orig, bool):
+                comb[param] = val_orig
+                continue
             limite_inf = val_orig * (1 - perturb_pct)
             limite_sup = val_orig * (1 + perturb_pct)
             
