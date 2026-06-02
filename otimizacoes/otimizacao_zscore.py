@@ -69,6 +69,7 @@ def main():
     mult_sls = [1.5, 2.0, 2.5]
     mult_tps = [2.0, 3.0, 4.0, 5.0]
     hurst_cutoffs = [0.30, 0.35, 0.40, 0.45]
+    usar_saida_neutra_vals = [0, 1]
 
     zscore_dict = {}
     print("Pre-calculando matrizes de Z-Score...")
@@ -90,7 +91,7 @@ def main():
 
     print("Gerando combinacoes do Grid Search...")
     combinacoes = list(itertools.product(
-        janelas_zscore, janelas_volatilidade, z_entries, mult_sls, mult_tps, hurst_cutoffs
+        janelas_zscore, janelas_volatilidade, z_entries, mult_sls, mult_tps, hurst_cutoffs, usar_saida_neutra_vals
     ))
     total_comb = len(combinacoes)
     print(f"Total de combinacoes a simular: {total_comb}")
@@ -100,7 +101,7 @@ def main():
     n_len = len(closes)
 
     print("\nIniciando Processamento Vetorizado...")
-    for idx, (j_z, j_v, z_e, m_sl, m_tp, h_cut) in enumerate(combinacoes):
+    for idx, (j_z, j_v, z_e, m_sl, m_tp, h_cut, usar_sn) in enumerate(combinacoes):
         if idx % 600 == 0 and idx > 0:
             print(f"Progresso: {idx}/{total_comb} ({(idx/total_comb)*100:.1f}%)")
 
@@ -162,11 +163,11 @@ def main():
             if direcao == 1:
                 hit_sl = np.where(fut_lows <= sl_preco)[0]
                 hit_tp = np.where(fut_highs >= tp_preco)[0]
-                hit_nt = np.where(fut_z >= -0.5)[0]
+                hit_nt = np.where(fut_z >= -0.5)[0] if usar_sn == 1 else np.array([])
             else:
                 hit_sl = np.where(fut_highs >= sl_preco)[0]
                 hit_tp = np.where(fut_lows <= tp_preco)[0]
-                hit_nt = np.where(fut_z <= 0.5)[0]
+                hit_nt = np.where(fut_z <= 0.5)[0] if usar_sn == 1 else np.array([])
 
             idx_sl = hit_sl[0] if len(hit_sl) > 0 else 9999
             idx_tp = hit_tp[0] if len(hit_tp) > 0 else 9999
@@ -231,6 +232,7 @@ def main():
             "mult_sl": m_sl,
             "mult_tp": m_tp,
             "hurst_cut": h_cut,
+            "usar_saida_neutra": usar_sn,
             "Trades": trades_count,
             "Win_Rate": round(win_rate, 2),
             "Payoff": round(payoff, 2),

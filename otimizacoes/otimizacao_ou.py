@@ -24,7 +24,8 @@ GRID_PARAMS = {
     "halflife_max": [30.0, 40.0, 50.0, 60.0],
     "zscore_threshold": [1.5, 2.0, 2.5, 3.0],
     "multiplicador_sl": [2.0, 2.5, 3.0],
-    "multiplicador_tp": [1.5, 2.0, 2.5, 3.0]
+    "multiplicador_tp": [1.5, 2.0, 2.5, 3.0],
+    "usar_saida_neutra": [0, 1]
 }
 
 # =============================================================================
@@ -236,7 +237,8 @@ def main():
                     hit_tp = np.where(fut_lows <= tp_preco)[0]
                     
                 fut_zscore = ou_zscore[i+1:end_idx]
-                hit_saida = np.where((fut_zscore > -0.3) & (fut_zscore < 0.3))[0]
+                usar_sn = int(params.get("usar_saida_neutra", 1))
+                hit_saida = np.where((fut_zscore > -0.3) & (fut_zscore < 0.3))[0] if usar_sn == 1 else np.array([])
                     
                 idx_sl = hit_sl[0] if len(hit_sl) > 0 else 9999
                 idx_tp = hit_tp[0] if len(hit_tp) > 0 else 9999
@@ -297,6 +299,7 @@ def main():
                     "zscore_threshold": params["zscore_threshold"],
                     "mult_sl": params["multiplicador_sl"],
                     "mult_tp": params["multiplicador_tp"],
+                    "usar_saida_neutra": int(params.get("usar_saida_neutra", 1)),
                     "Trades": trades_count,
                     "Win_Rate": round(win_rate, 2),
                     "Payoff": round(payoff, 2),
@@ -320,17 +323,16 @@ def main():
         top50 = df_res.head(50)
         dir_relatorios = dir_saida / "relatorios_top50"
         os.makedirs(dir_relatorios, exist_ok=True)
-                # Exportar em PNG Elegante
-        ARQUIVO_PNG = dir_relatorios / f"relatorio_top50_{estrategia_nome.lower()}.png"
+        # Exportar em PNG Elegante
+        ARQUIVO_PNG = dir_relatorios / "relatorio_top50_ou.png"
         try:
             from otimizacoes.export_utils import salvar_tabela_png
         except ImportError:
             import sys
-            from pathlib import Path
             sys.path.append(str(Path(__file__).resolve().parent))
             from export_utils import salvar_tabela_png
             
-        salvar_tabela_png(top50, ARQUIVO_PNG, titulo=f"Top 50 Parametrizações - {estrategia_nome.upper()}")
+        salvar_tabela_png(top50, ARQUIVO_PNG, titulo="Top 50 Parametrizações - OU")
         
         
         # Exportar arquivo JSON top50 para consumo do script

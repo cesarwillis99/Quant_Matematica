@@ -20,10 +20,10 @@ DIR_PROJETO = Path(__file__).resolve().parent.parent
 
 ATIVO = "EURUSD"
 TIMEFRAME = "H1"
-DIR_DATA = DIR_PROJETO / "data"
+DIR_DATA = DIR_PROJETO / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
 PARQUET_COMPLETO = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
 PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
-DIR_SAIDA = DIR_DATA / "otimizacoes"
+DIR_SAIDA = DIR_DATA / "otimizacoes" / estrategia_nome.lower()
 ARQUIVO_SAIDA = DIR_SAIDA / f"otimizacao_{ATIVO.lower()}_{TIMEFRAME.lower()}_{estrategia_nome.lower()}_resultados.parquet"
 ARQUIVO_JSON = DIR_SAIDA / f"selecionados_{estrategia_nome.lower()}.json"
 
@@ -293,6 +293,13 @@ def main():
             ARQUIVO_CSV = dir_relatorios / f"relatorio_top50_{estrategia_nome.lower()}.csv"
             top50.to_csv(ARQUIVO_CSV, index=False)
             
+            ARQUIVO_PNG = dir_relatorios / f"relatorio_top50_{estrategia_nome.lower()}.png"
+            try:
+                from otimizacoes.export_utils import salvar_tabela_png
+                salvar_tabela_png(top50, ARQUIVO_PNG, titulo=f"Top 50 Parametrizações - {estrategia_nome.upper()}")
+            except Exception as e:
+                pass
+            
             top50_dicts = top50.to_dict(orient="records")
             for i, p in enumerate(top50_dicts):
                 p["id_parametro"] = f"PCA_{ATIVO}_{TIMEFRAME}_TOP{i+1}"
@@ -308,7 +315,7 @@ def main():
             print("================================================================================")
             print(df_res.head(10).to_string())
             print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
-            print(f"Relatório Elegante PNG salvo em: {ARQUIVO_PNG}")
+            print(f"Relatório CSV salvo em: {ARQUIVO_CSV}")
             print(f"Candidatos JSON salvo em: {ARQUIVO_JSON_CANDIDATOS}")
         else:
             print("Nenhuma combinacao sobreviveu aos criterios rigorosos (Min 60 Trades, F.R > 1.0).")

@@ -468,7 +468,9 @@ def main():
             params=param_set, 
             janela_op=mask_op, 
             estrategia=estrategia, 
-            cache=cache_motor
+            cache=cache_motor,
+            ativo=ativo,
+            timeframe=timeframe
         )
         
         # Preparar DF para simulação

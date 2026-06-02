@@ -43,7 +43,8 @@ GRID_PARAMS = {
     "energia_quantile": [0.30, 0.40, 0.50],
     "pot_s1_cutoff": [0.6, 0.8, 1.0],
     "mult_sl": [1.5, 2.0, 2.5],
-    "mult_tp": [2.5, 3.5, 4.5]
+    "mult_tp": [2.5, 3.5, 4.5],
+    "usar_saida_neutra": [0, 1]
 }
 
 ESCALAS = [4, 12, 24, 120]
@@ -199,13 +200,15 @@ def main():
                 hit_tp = np.where(fut_highs >= tp_preco)[0]
                 # Saída neutra COMPRA = inflexão para baixo
                 nt_mask = (inflex_dn_indices > i) & (inflex_dn_indices < end_idx)
-                hit_nt = inflex_dn_indices[nt_mask] - (i + 1)
+                usar_sn = int(params.get("usar_saida_neutra", 1))
+                hit_nt = inflex_dn_indices[nt_mask] - (i + 1) if usar_sn == 1 else np.array([])
             else:
                 hit_sl = np.where(fut_highs >= sl_preco)[0]
                 hit_tp = np.where(fut_lows <= tp_preco)[0]
                 # Saída neutra VENDA = inflexão para cima
                 nt_mask = (inflex_up_indices > i) & (inflex_up_indices < end_idx)
-                hit_nt = inflex_up_indices[nt_mask] - (i + 1)
+                usar_sn = int(params.get("usar_saida_neutra", 1))
+                hit_nt = inflex_up_indices[nt_mask] - (i + 1) if usar_sn == 1 else np.array([])
                 
             idx_sl = hit_sl[0] if len(hit_sl) > 0 else 9999
             idx_tp = hit_tp[0] if len(hit_tp) > 0 else 9999
@@ -268,6 +271,7 @@ def main():
                 "pot_s1_cutoff": params["pot_s1_cutoff"],
                 "mult_sl": params["mult_sl"],
                 "mult_tp": params["mult_tp"],
+                "usar_saida_neutra": int(params.get("usar_saida_neutra", 1)),
                 "Trades": trades_count,
                 "Win_Rate": round(win_rate, 2),
                 "Payoff": round(payoff, 2),
@@ -296,6 +300,13 @@ def main():
             ARQUIVO_CSV = dir_relatorios / f"relatorio_top50_{estrategia_nome.lower()}.csv"
             top50.to_csv(ARQUIVO_CSV, index=False)
             
+            ARQUIVO_PNG = dir_relatorios / f"relatorio_top50_{estrategia_nome.lower()}.png"
+            try:
+                from otimizacoes.export_utils import salvar_tabela_png
+                salvar_tabela_png(top50, ARQUIVO_PNG, titulo=f"Top 50 Parametrizações - {estrategia_nome.upper()}")
+            except Exception as e:
+                pass
+            
             top50_dicts = top50.to_dict(orient="records")
             for i, p in enumerate(top50_dicts):
                 p["id_parametro"] = f"{estrategia_nome.upper()}_{ativo.upper()}_{timeframe.upper()}_TOP{i+1}"
@@ -311,7 +322,7 @@ def main():
             print("================================================================================")
             print(df_res.head(10).to_string())
             print(f"\nResultados salvos em: {ARQUIVO_SAIDA}")
-            print(f"Relatório Elegante PNG salvo em: {ARQUIVO_PNG}")
+            print(f"Relatório CSV salvo em: {ARQUIVO_CSV}")
             print(f"Candidatos JSON salvo em: {ARQUIVO_JSON_CANDIDATOS}")
         else:
             print("Nenhuma combinacao sobreviveu aos criterios rigorosos (Min 60 Trades, F.R > 1.0).")

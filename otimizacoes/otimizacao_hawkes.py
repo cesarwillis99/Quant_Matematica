@@ -18,13 +18,9 @@ warnings.filterwarnings("ignore")
 # =============================================================================
 DIR_PROJETO = Path(__file__).resolve().parent.parent
 
-parser = argparse.ArgumentParser(description="Otimizador Hawkes Grid Search")
-parser.add_argument("--ativo", type=str, default="eurusd")
-parser.add_argument("--timeframe", type=str, default="h1")
-args = parser.parse_args()
-
-ativo = args.ativo.lower()
-timeframe = args.timeframe.lower()
+# Valores default (sobrescritos dentro de main() via argparse quando executado diretamente)
+ativo = "eurusd"
+timeframe = "h1"
 
 DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
 DIR_SAIDA   = DIR_DATA / "otimizacoes"
@@ -41,7 +37,8 @@ GRID_PARAMS = {
     "lambda_norm_min_sinal": [2.0, 2.5, 3.0, 3.5],
     "lambda_norm_saida": [0.3, 0.5, 0.6, 0.8],
     "multiplicador_sl": [1.5, 2.0, 2.5],
-    "multiplicador_tp": [2.0, 3.0, 4.0]
+    "multiplicador_tp": [2.0, 3.0, 4.0],
+    "usar_saida_neutra": [0, 1]
 }
 
 JANELA_EVENTOS = 60
@@ -171,6 +168,22 @@ def pre_calcular_base() -> tuple:
 
 
 def main():
+    global ativo, timeframe, DIR_DATA, DIR_SAIDA, PARQUET_COMPLETO, PARQUET_OPERACIONAL, ARQUIVO_SAIDA
+
+    parser = argparse.ArgumentParser(description="Otimizador Hawkes Grid Search")
+    parser.add_argument("--ativo", type=str, default="eurusd")
+    parser.add_argument("--timeframe", type=str, default="h1")
+    args = parser.parse_args()
+
+    ativo = args.ativo.lower()
+    timeframe = args.timeframe.lower()
+
+    DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
+    DIR_SAIDA   = DIR_DATA / "otimizacoes"
+    PARQUET_COMPLETO    = DIR_DATA / f"{ativo}_{timeframe}_completo.parquet"
+    PARQUET_OPERACIONAL = DIR_DATA / f"{ativo}_{timeframe}_operacional.parquet"
+    ARQUIVO_SAIDA       = DIR_SAIDA / "otimizacao_hawkes_resultados.parquet"
+
     os.makedirs(DIR_SAIDA, exist_ok=True)
     
     opens, closes, highs, lows, R_t, vr_pips, lambda_norm, excitacao, valido_hist, mask_op, n_candles = pre_calcular_base()
@@ -253,7 +266,8 @@ def main():
 
             # Saída por exaustão: lambda_norm caiu abaixo do threshold
             fut_lambda_norm = lambda_norm[i+1:end_idx]
-            hit_saida = np.where(fut_lambda_norm < params["lambda_norm_saida"])[0]
+            usar_sn = int(params.get("usar_saida_neutra", 1))
+            hit_saida = np.where(fut_lambda_norm < params["lambda_norm_saida"])[0] if usar_sn == 1 else np.array([])
 
             idx_sl    = hit_sl[0]    if len(hit_sl)    > 0 else 9999
             idx_tp    = hit_tp[0]    if len(hit_tp)    > 0 else 9999
@@ -315,6 +329,7 @@ def main():
                 "lambda_norm_saida": params["lambda_norm_saida"],
                 "mult_sl": params["multiplicador_sl"],
                 "mult_tp": params["multiplicador_tp"],
+                "usar_saida_neutra": int(params.get("usar_saida_neutra", 1)),
                 "Trades": trades_count,
                 "Win_Rate": round(win_rate, 2),
                 "Payoff": round(payoff, 2),

@@ -267,7 +267,6 @@ def main():
             from otimizacoes.export_utils import salvar_tabela_png
         except ImportError:
             import sys
-            from pathlib import Path
             sys.path.append(str(Path(__file__).resolve().parent))
             from export_utils import salvar_tabela_png
             

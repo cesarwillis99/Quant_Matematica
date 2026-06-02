@@ -147,7 +147,8 @@ def gerar_grid(param_nome: str, valor_original) -> np.ndarray:
 # ===================================================================
 
 def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
-                    estrategia: str, cache: dict):
+                    estrategia: str, cache: dict,
+                    ativo: str = None, timeframe: str = None):
     """
     Roteador que seleciona a logica de sinais correta para cada estrategia.
     As chaves usadas correspondem EXATAMENTE as chaves do PARAMS_OTIMOS
@@ -159,10 +160,15 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         janela_op: Mascara booleana da janela operacional.
         estrategia: Nome da estrategia (ex: MOMENTUM, ZSCORE, etc.)
         cache: Dicionario mutavel para armazenar pre-calculos pesados.
+        ativo: Nome do ativo (ex: eurusd). Se None, usa a global ATIVO.
+        timeframe: Timeframe (ex: h1). Se None, usa a global TIMEFRAME.
 
     Returns:
         Tupla (sinal, sl_pips, tp_pips) como arrays numpy.
     """
+    # Resolver ativo/timeframe: usa o parâmetro passado, ou cai para a global
+    _ativo = ativo.lower() if ativo else ATIVO.lower()
+    _timeframe = timeframe.lower() if timeframe else TIMEFRAME.lower()
     closes = df["Close"].values
     n = len(closes)
 
@@ -245,7 +251,10 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         hurst = df["hurst"].values
 
         # Injetando saída neutra para ZSCORE: retorno entre -0.5 e 0.5
-        cache["saida_neutra"] = (z_array > -0.5) & (z_array < 0.5)
+        if int(params.get("usar_saida_neutra", 1)) == 1:
+            cache["saida_neutra"] = (z_array > -0.5) & (z_array < 0.5)
+        else:
+            cache.pop("saida_neutra", None)
 
         cond_base = janela_op & (hurst < h_cut)
         # LONG: fechou abaixo do limiar negativo — entrada imediata
@@ -273,9 +282,9 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             import math as _math
             from scipy.optimize import minimize as _minimize
 
-            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
-            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
-            df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{_ativo}_{_timeframe}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_completo.parquet")
+            df_op = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_operacional.parquet")
 
             closes_h = df_comp["Close"].values
             n_h = len(closes_h)
@@ -351,11 +360,12 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         excit_ok  = exc < params["excitacao_maxima"]
         norm_high = lam_norm > params["lambda_norm_min_sinal"]
         
-        # Injetando saída neutra dinamicamente no cache desativada para Hawkes
-        # (Alinhamento com o backtest oficial da esteira que opera estritamente em SL/TP)
-        # lam_norm_saida = params.get("lambda_norm_saida", 0.6)
-        # cache["saida_neutra"] = lam_norm < lam_norm_saida
-        
+        # Injetando saída neutra dinamicamente no cache para Hawkes
+        if int(params.get("usar_saida_neutra", 1)) == 1:
+            lam_norm_saida = params.get("lambda_norm_saida", 0.6)
+            cache["saida_neutra"] = lam_norm < lam_norm_saida
+        else:
+            cache.pop("saida_neutra", None)
         cond_base = valido & excit_ok & mask_op & norm_falling & norm_high
 
         sinal_h = np.zeros(n_h, dtype=np.int8)
@@ -375,12 +385,12 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         cache_key = f"ou_{j_ou}"
         if cache_key not in cache:
             from otimizacoes.otimizacao_ou import calcular_ou_rolling
-            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
-            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{_ativo}_{_timeframe}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_completo.parquet")
             z, hl, val = calcular_ou_rolling(df_comp, j_ou)
             cache[cache_key] = (z, hl, val)
             if "ou_mask_op" not in cache:
-                df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
+                df_op = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_operacional.parquet")
                 cache["ou_mask_op"] = df_comp.index.isin(df_op.index)
                 cache["ou_opens"]   = df_comp["Open"].values
                 cache["ou_closes"] = df_comp["Close"].values
@@ -397,7 +407,10 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         n_ou = cache["ou_n"]
 
         # Saida neutra para OU (retorno a media zscore entre -0.3 e 0.3)
-        cache["saida_neutra"] = (z > -0.3) & (z < 0.3)
+        if int(params.get("usar_saida_neutra", 1)) == 1:
+            cache["saida_neutra"] = (z > -0.3) & (z < 0.3)
+        else:
+            cache.pop("saida_neutra", None)
 
         cond_op = val & (hl >= 1.0) & (hl <= params["halflife_max"]) & mask_op
         cond_buy  = cond_op & (z <= -params["zscore_threshold"])
@@ -417,12 +430,12 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         cache_key = f"our_{j_ou}"
         if cache_key not in cache:
             from otimizacoes.otimizacao_ou_reverso import calcular_ou_rolling
-            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
-            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{_ativo}_{_timeframe}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_completo.parquet")
             z, hl, val = calcular_ou_rolling(df_comp, j_ou)
             cache[cache_key] = (z, hl, val)
             if "our_mask_op" not in cache:
-                df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
+                df_op = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_operacional.parquet")
                 cache["our_mask_op"] = df_comp.index.isin(df_op.index)
                 cache["our_opens"]   = df_comp["Open"].values
                 cache["our_closes"] = df_comp["Close"].values
@@ -439,7 +452,10 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         n_our = cache["our_n"]
 
         # Saida neutra para OU_REVERSO (exaustao neutra inversa)
-        cache["saida_neutra"] = (z > -0.3) & (z < 0.3)
+        if int(params.get("usar_saida_neutra", 1)) == 1:
+            cache["saida_neutra"] = (z > -0.3) & (z < 0.3)
+        else:
+            cache.pop("saida_neutra", None)
 
         cond_op = val & (hl >= 1.0) & (hl <= params["halflife_max"]) & mask_op
         # REVERSO: compra se Z >= threshold, vende se Z <= -threshold
@@ -460,8 +476,8 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
         cache_key = f"pca_{j_pca}"
         if cache_key not in cache:
             from otimizacoes.otimizacao_pca import calcular_pca_rolante
-            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
-            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{_ativo}_{_timeframe}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_completo.parquet")
             cl = df_comp["Close"].values
             lr_p = np.log(cl / np.roll(cl, 1)); lr_p[0] = 0.0
             lr_sq = lr_p ** 2; lr_abs = np.abs(lr_p)
@@ -471,7 +487,7 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
             pca_z, pca_dom = calcular_pca_rolante(features, j_pca)
             cache[cache_key] = (pca_z, pca_dom)
             if "pca_mask_op" not in cache:
-                df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
+                df_op = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_operacional.parquet")
                 cache["pca_mask_op"] = df_comp.index.isin(df_op.index)
                 cache["pca_opens"]   = df_comp["Open"].values
                 cache["pca_closes"] = cl
@@ -499,9 +515,9 @@ def calcular_sinais(df: pd.DataFrame, params: dict, janela_op: np.ndarray,
     elif estrategia == "WAVELET":
         if "wav_cache_ready" not in cache:
             import pywt
-            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
-            df_comp = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet")
-            df_op = pd.read_parquet(dir_data / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet")
+            dir_data = Path(__file__).resolve().parent.parent.parent / f"quant_{_ativo}_{_timeframe}" / "data"
+            df_comp = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_completo.parquet")
+            df_op = pd.read_parquet(dir_data / f"{_ativo}_{_timeframe}_operacional.parquet")
 
             cl = df_comp["Close"].values
             lr_w = np.log(cl / np.roll(cl, 1)); lr_w[0] = 0.0
@@ -1257,7 +1273,7 @@ def rodar_distribuicao_na_esteira(df: pd.DataFrame, params: dict, estrategia: st
     # Filtrar parametros extras/metadados
     meta_cols = {
         "id", "id_parametro", "Trades", "Lucro_Total_Pips", "Max_DD_Pips", 
-        "Ret_DD", "Profit_Factor", "lucro", "drawdown", "Win_Rate", "Payoff"
+        "Ret_DD", "Profit_Factor", "lucro", "drawdown", "Win_Rate", "Payoff", "usar_saida_neutra"
     }
     params_filtrados = {k: v for k, v in params.items() if k not in meta_cols}
     
@@ -1277,7 +1293,8 @@ def rodar_distribuicao_na_esteira(df: pd.DataFrame, params: dict, estrategia: st
     cache = {}
     
     # Referencia (ponto otimo)
-    sinal_ref, sl_ref, tp_ref = calcular_sinais(df, params_filtrados, janela_op, estrategia, cache)
+    sinal_ref, sl_ref, tp_ref = calcular_sinais(df, params_filtrados, janela_op, estrategia, cache,
+                                                   ativo=ativo, timeframe=timeframe)
     resultado_ref = rodar_backtest(df, sinal_ref, sl_ref, tp_ref, estrategia, cache)
     dd_referencia = resultado_ref["dd_pct"]
     
@@ -1295,7 +1312,8 @@ def rodar_distribuicao_na_esteira(df: pd.DataFrame, params: dict, estrategia: st
         for val in grid:
             params_teste = params_filtrados.copy()
             params_teste[param_name] = float(val)
-            sinal, sl, tp = calcular_sinais(df, params_teste, janela_op, estrategia, cache)
+            sinal, sl, tp = calcular_sinais(df, params_teste, janela_op, estrategia, cache,
+                                             ativo=ativo, timeframe=timeframe)
             resultado = rodar_backtest(df, sinal, sl, tp, estrategia, cache)
             resultados_steps.append(resultado)
             

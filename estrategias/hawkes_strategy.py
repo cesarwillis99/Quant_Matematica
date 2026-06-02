@@ -317,7 +317,7 @@ def executar_pipeline_hawkes():
     
     # ── PARTE 7: Parquet de Saída ──
     PARQUET_SAIDA.parent.mkdir(parents=True, exist_ok=True)
-        df.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy")
+    df.to_parquet(PARQUET_SAIDA, engine="pyarrow", compression="snappy")
     logger.info(f"Parquet gerado com sucesso: {PARQUET_SAIDA.name}")
     
     # ── PARTE 8: Plotagem (4 Painéis) ──

@@ -97,7 +97,7 @@ def gerar_combinacoes_aleatorias(params_otimos: dict, n_comb: int, perturb_pct: 
     for _ in range(n_comb):
         comb = {}
         for param, val_orig in params_otimos.items():
-            if not isinstance(val_orig, (int, float, np.integer, np.floating)) or isinstance(val_orig, bool):
+            if not isinstance(val_orig, (int, float, np.integer, np.floating)) or isinstance(val_orig, bool) or param == "usar_saida_neutra":
                 comb[param] = val_orig
                 continue
             limite_inf = val_orig * (1 - perturb_pct)
@@ -467,55 +467,70 @@ def gerar_grafico(resultados: list, resultado_otimo: dict, passou_tudo: bool,
 def rodar_permutacao_na_esteira(df: pd.DataFrame, params_otimos: dict, estrategia: str, ativo: str, timeframe: str, dir_saida: Path) -> dict:
     horas = df.index.strftime("%H:%M")
     janela_op = (horas >= HORA_INICIO_OP) & (horas <= HORA_FIM_OP)
-    
-    # Pre-calculos
+
+    # Garantir log_return no dataframe (necessário para ZSCORE, VR, etc.)
+    if "log_return" not in df.columns:
+        closes_tmp = df["Close"].values
+        df = df.copy()
+        df["log_return"] = np.log(closes_tmp / np.roll(closes_tmp, 1))
+        df["log_return"].iloc[0] = 0.0
+
     closes = df["Close"].values
     log_ret = df["log_return"].values
-    velocidade = df["Close"].diff(1).values
-    aceleracao = pd.Series(velocidade).diff(1).values
-    
-    def _percentrank(arr):
-        val = arr[-1]
-        hist = arr[:-1]
-        if len(hist) == 0: return 0.5
-        return float(np.sum(hist < val)) / len(hist)
-        
-    percentil = pd.Series(aceleracao).rolling(100, min_periods=100).apply(_percentrank, raw=True).values
-    
-    def _entropia(arr):
-        if np.std(arr) < 1e-15: return 0.0
-        c, _ = np.histogram(arr, bins=10)
-        p = c / len(arr)
-        p = p[p > 0]
-        return float(np.clip(-np.sum(p * np.log2(p)) / np.log2(10), 0, 1))
-        
-    entropia = pd.Series(log_ret).rolling(30, min_periods=30).apply(_entropia, raw=True).values
-    
+
+    # Pre-calculos: apenas features universais (VR) são sempre calculadas.
+    # Features específicas do MOMENTUM (velocidade/percentil/entropia) só são
+    # pré-calculadas quando a estratégia é MOMENTUM, evitando overhead desnecessário
+    # e possíveis erros para outras estratégias.
     vr = pd.Series(log_ret).rolling(50, min_periods=50).std(ddof=1).values
     vr_pips = vr * closes * FATOR_PIPS
-    
-    static_cols = {
-        "velocidade": velocidade, "percentil": percentil,
-        "entropia": entropia, "vr_pips": vr_pips
-    }
-    
-    sinal_ref, sl_ref, tp_ref = calcular_sinais(df, params_otimos, janela_op, estrategia, cache=static_cols)
+
+    static_cols = {"vr_pips": vr_pips}
+
+    if estrategia == "MOMENTUM":
+        velocidade = df["Close"].diff(1).values
+        aceleracao = pd.Series(velocidade).diff(1).values
+
+        def _percentrank(arr):
+            val = arr[-1]
+            hist = arr[:-1]
+            if len(hist) == 0: return 0.5
+            return float(np.sum(hist < val)) / len(hist)
+
+        percentil = pd.Series(aceleracao).rolling(100, min_periods=100).apply(_percentrank, raw=True).values
+
+        def _entropia(arr):
+            if np.std(arr) < 1e-15: return 0.0
+            c, _ = np.histogram(arr, bins=10)
+            p = c / len(arr)
+            p = p[p > 0]
+            return float(np.clip(-np.sum(p * np.log2(p)) / np.log2(10), 0, 1))
+
+        entropia = pd.Series(log_ret).rolling(30, min_periods=30).apply(_entropia, raw=True).values
+
+        static_cols["velocidade"] = velocidade
+        static_cols["percentil"] = percentil
+        static_cols["entropia"] = entropia
+
+    sinal_ref, sl_ref, tp_ref = calcular_sinais(df, params_otimos, janela_op, estrategia, cache=static_cols,
+                                                 ativo=ativo, timeframe=timeframe)
     resultado_otimo = rodar_backtest(df, sinal_ref, sl_ref, tp_ref)
-    
+
     combinacoes = gerar_combinacoes_aleatorias(params_otimos, N_COMBINACOES, PERTURBACAO_PCT, SEED)
     resultados = []
-    
+
     for params in combinacoes:
-        sinal, sl, tp = calcular_sinais(df, params, janela_op, estrategia, cache=static_cols)
+        sinal, sl, tp = calcular_sinais(df, params, janela_op, estrategia, cache=static_cols,
+                                         ativo=ativo, timeframe=timeframe)
         res = rodar_backtest(df, sinal, sl, tp)
         registro = params.copy()
         registro.update(res)
         resultados.append(registro)
-        
+
     pnls = [r["pnl_pct"] for r in resultados]
     frs  = [r["fr"] for r in resultados]
     fls  = [r["fator_lucro"] for r in resultados]
-    
+
     n_lucrativas = sum(1 for p in pnls if p > 0.0)
     pct_lucrativas = n_lucrativas / N_COMBINACOES
     passou_c1 = pct_lucrativas >= CRITERIO_1_PCT_LUCRATIVAS
@@ -525,20 +540,20 @@ def rodar_permutacao_na_esteira(df: pd.DataFrame, params_otimos: dict, estrategi
     passou_c3 = fr_mediano >= CRITERIO_3_FR_MEDIANO
     fl_mediano = float(np.median(fls))
     passou_c4 = fl_mediano >= CRITERIO_4_FL_MEDIANO
-    
+
     pnl_media = float(np.mean(pnls))
     pnl_std   = float(np.std(pnls))
     pnl_otimo = float(resultado_otimo["pnl_pct"])
     limite_outlier = pnl_mediano + CRITERIO_5_OUTLIER_SIGMA * pnl_std
     passou_c5 = pnl_otimo < limite_outlier
-    
+
     passou_tudo = passou_c1 and passou_c2 and passou_c3 and passou_c4 and passou_c5
-    
+
     criterios_status = {"c1": passou_c1, "c2": passou_c2, "c3": passou_c3, "c4": passou_c4, "c5": passou_c5}
     medians = {"pct_lucrativas": pct_lucrativas, "pnl": pnl_mediano, "fr": fr_mediano, "fl": fl_mediano}
-    
+
     gerar_grafico(resultados, resultado_otimo, passou_tudo, criterios_status, medians, dir_saida)
-    
+
     return {"aprovado": passou_tudo}
 
 

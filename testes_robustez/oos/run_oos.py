@@ -342,7 +342,8 @@ def rodar_oos_na_esteira(df_oos: pd.DataFrame, params_otimos: dict, estrategia: 
     # geração do sinal final, nunca nos cálculos de indicadores.
     
     cache = {}
-    sinal, sl_pips, tp_pips = calcular_sinais(df_oos, params_otimos, janela_op, estrategia, cache)
+    sinal, sl_pips, tp_pips = calcular_sinais(df_oos, params_otimos, janela_op, estrategia, cache,
+                                               ativo=ativo, timeframe=timeframe)
     equity_curve, trades = simular_backtest_candle_a_candle(df_oos, sinal, sl_pips, tp_pips)
     metricas = calcular_metricas(equity_curve, trades)
     
@@ -459,7 +460,8 @@ def main():
     # Recalcular Sinais OOS
     print(f"[SINAIS] Calculando sinais vetorizados para {estrategia}...")
     cache = {}
-    sinal, sl_pips, tp_pips = calcular_sinais(df_comp, params_otimos, janela_op, estrategia, cache)
+    sinal, sl_pips, tp_pips = calcular_sinais(df_comp, params_otimos, janela_op, estrategia, cache,
+                                               ativo=ativo, timeframe=timeframe)
 
     # Simular backtest candle-a-candle
     print("[BACKTEST] Rodando simulação candle-a-candle institucional no OOS...")
