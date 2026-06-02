@@ -25,6 +25,16 @@ DIR_PROJETO = Path(__file__).resolve().parent.parent
 if str(DIR_PROJETO) not in sys.path:
     sys.path.insert(0, str(DIR_PROJETO))
 
+SPREAD_POR_ATIVO = {
+    "eurusd": 0.5,
+    "gbpusd": 1.0,
+    "usdjpy": 0.7,
+    "usdcad": 0.7,
+    "audusd": 0.7,
+    "nzdusd": 0.7,
+    "usdchf": 0.7,
+}
+
 from testes_robustez.distribuicao_parametros.distribuicao_parametros import calcular_sinais
 from backtests.backtest_individual import simular_estrategia, Operacao
 
@@ -160,7 +170,8 @@ def run_spread(params, ativo, timeframe, estrategia, param_id, df_ops, dir_saida
     csv_temp = os.path.join(especific_dir, f"temp_ops_{estrategia}.csv")
     df_ops.to_csv(csv_temp, index=False)
     
-    res = rodar_spread(csv_temp, f"{estrategia}_{param_id}", ativo, especific_dir, spread_original=0.5, spread_multiplo=1.8, pip_value_por_lot=10.0, max_degradacao=0.25)
+    spread_orig = SPREAD_POR_ATIVO.get(ativo.lower(), 0.5)
+    res = rodar_spread(csv_temp, f"{estrategia}_{param_id}", ativo, especific_dir, spread_original=spread_orig, spread_multiplo=1.8, pip_value_por_lot=10.0, max_degradacao=0.25)
     if res and res.get('aprovado', False):
         return True
     return False

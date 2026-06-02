@@ -32,7 +32,18 @@ if sys.stdout.encoding != "utf-8":
 # Configurações globais de negociação
 CAPITAL_INICIAL    = 10_000.0
 RISCO_POR_TRADE    = 0.01
-SPREAD_PIPS        = 0.5
+
+SPREAD_POR_ATIVO = {
+    "eurusd": 0.5,
+    "gbpusd": 1.0,
+    "usdjpy": 0.7,
+    "usdcad": 0.7,
+    "audusd": 0.7,
+    "nzdusd": 0.7,
+    "usdchf": 0.7,
+}
+SPREAD_PIPS        = 0.5  # Atualizado via global
+
 VALOR_PIP_POR_LOTE = 10.0
 FATOR_PIPS         = 10_000
 HORA_INICIO_OP     = "10:00"
@@ -328,6 +339,9 @@ def gerar_relatorio_e_graficos(metricas: dict, equity_curve: pd.Series, trades: 
 # FUNCAO EXPORTAVEL PARA A ESTEIRA (FAIL-FAST)
 # ===================================================================
 def rodar_oos_na_esteira(df_oos: pd.DataFrame, params_otimos: dict, estrategia: str, ativo: str, timeframe: str, tipo_oos: str, sufixo_ano: str, dir_saida: Path, param_id: str = "") -> dict:
+    global SPREAD_PIPS
+    SPREAD_PIPS = SPREAD_POR_ATIVO.get(ativo.lower(), 0.5)
+
     horas = df_oos.index.strftime("%H:%M")
     janela_op = (
         (df_oos.index.weekday >= 0) &

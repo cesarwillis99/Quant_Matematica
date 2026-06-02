@@ -20,6 +20,19 @@ ativo = args.ativo.lower()
 timeframe = args.timeframe.lower()
 estrategia_nome = Path(__file__).stem.replace('otimizacao_', '')
 
+# Spread por ativo (em pips)
+SPREAD_POR_ATIVO = {
+    "eurusd": 0.5,
+    "gbpusd": 1.0,
+    "usdjpy": 0.7,
+    "usdcad": 0.7,
+    "audusd": 0.7,
+    "nzdusd": 0.7,
+    "usdchf": 0.7,
+}
+SPREAD_PIPS = SPREAD_POR_ATIVO.get(ativo, 0.5)
+print(f"Spread configurado para {ativo.upper()}: {SPREAD_PIPS} pips")
+
 DIR_PROJETO = Path(__file__).resolve().parent.parent
 DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
 DIR_OUT     = DIR_DATA / "otimizacoes" / estrategia_nome
@@ -193,7 +206,7 @@ def main():
             else:
                 trade_pips = (entrada_preco - saida_preco) * 10000.0
 
-            trade_pips -= 0.5  # Spread
+            trade_pips -= SPREAD_PIPS  # Spread dinâmico por ativo
             pnls.append(trade_pips)
 
         if len(pnls) < 30:

@@ -13,6 +13,18 @@ import json
 
 warnings.filterwarnings("ignore")
 
+# Spread por ativo (em pips)
+SPREAD_POR_ATIVO = {
+    "eurusd": 0.5,
+    "gbpusd": 1.0,
+    "usdjpy": 0.7,
+    "usdcad": 0.7,
+    "audusd": 0.7,
+    "nzdusd": 0.7,
+    "usdchf": 0.7,
+}
+SPREAD_PIPS = 0.5  # Atualizado em main() via dicionário
+
 # =============================================================================
 # CONSTANTES E CAMINHOS
 # =============================================================================
@@ -177,6 +189,9 @@ def main():
 
     ativo = args.ativo.lower()
     timeframe = args.timeframe.lower()
+    global SPREAD_PIPS
+    SPREAD_PIPS = SPREAD_POR_ATIVO.get(ativo, 0.5)
+    print(f"Spread configurado para {ativo.upper()}: {SPREAD_PIPS} pips")
 
     DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
     DIR_SAIDA   = DIR_DATA / "otimizacoes"
@@ -294,7 +309,7 @@ def main():
             else:
                 pnl = (preco_entrada - saida_preco) * 10000.0
                 
-            pnl -= 0.5 # Spread
+            pnl -= SPREAD_PIPS  # Spread dinâmico por ativo
                 
             lucro_total_pips += pnl
             trades_count += 1

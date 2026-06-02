@@ -131,6 +131,19 @@ def main():
     
     ativo = args.ativo.lower()
     timeframe = args.timeframe.lower()
+
+    # Spread por ativo (em pips)
+    SPREAD_POR_ATIVO = {
+        "eurusd": 0.5,
+        "gbpusd": 1.0,
+        "usdjpy": 0.7,
+        "usdcad": 0.7,
+        "audusd": 0.7,
+        "nzdusd": 0.7,
+        "usdchf": 0.7,
+    }
+    SPREAD_PIPS = SPREAD_POR_ATIVO.get(ativo, 0.5)
+    print(f"Spread configurado para {ativo.upper()}: {SPREAD_PIPS} pips")
     
     dir_projeto = Path(__file__).resolve().parent.parent
     dir_data = dir_projeto / f"quant_{ativo}_{timeframe}" / "data"
@@ -265,7 +278,7 @@ def main():
                 else:
                     pnl = (preco_entrada - saida_preco) * 10000.0
                     
-                pnl -= 0.5 # Spread
+                pnl -= SPREAD_PIPS # Spread dinâmico
                     
                 lucro_total_pips += pnl
                 trades_count += 1

@@ -23,11 +23,25 @@ ativo = args.ativo.lower()
 timeframe = args.timeframe.lower()
 estrategia_nome = "momentum"
 
+# Spread por ativo (em pips)
+SPREAD_POR_ATIVO = {
+    "eurusd": 0.5,
+    "gbpusd": 1.0,
+    "usdjpy": 0.7,
+    "usdcad": 0.7,
+    "audusd": 0.7,
+    "nzdusd": 0.7,
+    "usdchf": 0.7,
+}
+SPREAD_PIPS = SPREAD_POR_ATIVO.get(ativo, 0.5)
+print(f"Spread configurado para {ativo.upper()}: {SPREAD_PIPS} pips")
+
 DIR_PROJETO = Path(__file__).resolve().parent.parent
 DIR_DATA    = DIR_PROJETO / f"quant_{ativo}_{timeframe}" / "data"
 DIR_SAIDA   = DIR_DATA / "otimizacoes"
 
-PARQUET_ENTRADA = DIR_DATA / f"{ativo}_{timeframe}_hurst.parquet"
+PARQUET_COMPLETO = DIR_DATA / f"{ativo}_{timeframe}_completo.parquet"
+PARQUET_HURST   = DIR_DATA / f"{ativo}_{timeframe}_hurst.parquet"
 ARQUIVO_SAIDA   = DIR_SAIDA / f"otimizacao_{estrategia_nome}_resultados.parquet"
 ARQUIVO_JSON    = DIR_SAIDA / f"otimizacao_{estrategia_nome}_top10.json"
 
@@ -78,7 +92,11 @@ def main():
     os.makedirs(DIR_SAIDA, exist_ok=True)
     
     print("Carregando dados...")
-    df = pd.read_parquet(PARQUET_ENTRADA)
+    df = pd.read_parquet(PARQUET_COMPLETO)
+    
+    if "hurst" not in df.columns and PARQUET_HURST.exists():
+        df_hurst = pd.read_parquet(PARQUET_HURST, columns=["hurst"])
+        df = df.join(df_hurst, how="left")
     
     closes = df["Close"].values
     highs = df["High"].values
@@ -206,7 +224,7 @@ def main():
             else:
                 pnl = (preco_entrada - saida_preco) * 10000.0
                 
-            pnl -= 0.5 # Spread
+            pnl -= SPREAD_PIPS # Spread dinâmico
                 
             lucro_total_pips += pnl
             trades_count += 1

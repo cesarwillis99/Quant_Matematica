@@ -18,6 +18,18 @@ warnings.filterwarnings("ignore")
 estrategia_nome = Path(__file__).stem.replace('otimizacao_', '')
 DIR_PROJETO = Path(__file__).resolve().parent.parent
 
+# Spread por ativo (em pips)
+SPREAD_POR_ATIVO = {
+    "eurusd": 0.5,
+    "gbpusd": 1.0,
+    "usdjpy": 0.7,
+    "usdcad": 0.7,
+    "audusd": 0.7,
+    "nzdusd": 0.7,
+    "usdchf": 0.7,
+}
+SPREAD_PIPS = 0.5  # Atualizado em main() via argparse
+
 ATIVO = "EURUSD"
 TIMEFRAME = "H1"
 DIR_DATA = DIR_PROJETO / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
@@ -107,6 +119,21 @@ def calcular_pca_rolante(features: np.ndarray, janela: int):
     return pca_z_pc1, pca_dominancia
 
 def main():
+    global ATIVO, TIMEFRAME, DIR_DATA, PARQUET_COMPLETO, PARQUET_OPERACIONAL, DIR_SAIDA, ARQUIVO_SAIDA, ARQUIVO_JSON, SPREAD_PIPS
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--ativo", type=str, default="eurusd")
+    parser.add_argument("--timeframe", type=str, default="h1")
+    args = parser.parse_args()
+    ATIVO = args.ativo.upper()
+    TIMEFRAME = args.timeframe.upper()
+    SPREAD_PIPS = SPREAD_POR_ATIVO.get(args.ativo.lower(), 0.5)
+    print(f"Spread configurado para {ATIVO}: {SPREAD_PIPS} pips")
+    DIR_DATA = DIR_PROJETO / f"quant_{ATIVO.lower()}_{TIMEFRAME.lower()}" / "data"
+    PARQUET_COMPLETO = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_completo.parquet"
+    PARQUET_OPERACIONAL = DIR_DATA / f"{ATIVO.lower()}_{TIMEFRAME.lower()}_operacional.parquet"
+    DIR_SAIDA = DIR_DATA / "otimizacoes" / estrategia_nome.lower()
+    ARQUIVO_SAIDA = DIR_SAIDA / f"otimizacao_{ATIVO.lower()}_{TIMEFRAME.lower()}_{estrategia_nome.lower()}_resultados.parquet"
+    ARQUIVO_JSON = DIR_SAIDA / f"selecionados_{estrategia_nome.lower()}.json"
     os.makedirs(DIR_SAIDA, exist_ok=True)
     
     print("Carregando dados...")
@@ -230,7 +257,7 @@ def main():
                 else:
                     pnl = (preco_entrada - saida_preco) * 10000.0
                     
-                pnl -= 0.5 # Spread
+                pnl -= SPREAD_PIPS  # Spread dinâmico por ativo
                     
                 lucro_total_pips += pnl
                 trades_count += 1
