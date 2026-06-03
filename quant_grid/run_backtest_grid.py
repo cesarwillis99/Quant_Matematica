@@ -32,7 +32,7 @@ from pathlib import Path
 from quant_grid.config import (
     CAPITAL_INICIAL, LOT_SIZE, FATOR_PIPS, JANELA_VR,
     PARQUET_COMPLETO, PARQUET_OPERACIONAL,
-    DIR_GRAFICOS, DIR_METRICAS,
+    DIR_GRAFICOS, DIR_METRICAS, DIR_GRID,
 )
 from quant_grid.core.grid_engine import GridState
 from quant_grid.core.grid_executor import (
@@ -178,6 +178,7 @@ def rodar_backtest_grid(
         equity_curve, trades.
     """
     # ── Pré-processamento ─────────────────────────────────────────────────────
+    opens       = df['Open'].values.astype(np.float64)
     closes      = df['Close'].values.astype(np.float64)
     highs       = df['High'].values.astype(np.float64)
     lows        = df['Low'].values.astype(np.float64)
@@ -202,7 +203,32 @@ def rodar_backtest_grid(
         close = closes[t]
         dt    = dts[t]
 
-        # ── PASSO 1 — Fechamento obrigatório sexta 21h55 ──────────────────────
+        # ── PASSO 1 — Verificar novo gatilho na abertura do candle t (baseado no sinal de t-1) ──
+        if t > 0 and grid_ativo is None and sinais[t - 1] != 0:
+            vr_atual = calcular_vr_atual(log_returns[:t], closes[t - 1], JANELA_VR)
+            if vr_atual > 0.0:
+                espacamento = calcular_espacamento_pips(
+                    vr_atual, params['mult_espacamento']
+                )
+                grid_ativo = GridState(
+                    direcao=sinais[t - 1],
+                    preco_inicial=opens[t],  # Execução na abertura do candle seguinte
+                    lot_size=LOT_SIZE,
+                    espacamento_pips=espacamento,
+                    vr_abertura=vr_atual,
+                    candle_idx=t,
+                )
+                # Calcular alvo inicial logo após abertura
+                grid_ativo.atualizar_alvo(vr_atual, params['mult_alvo'])
+                if verbose:
+                    dir_str = 'COMPRA' if sinais[t - 1] == 1 else 'VENDA'
+                    logger.info(
+                        f'[{dt}] Novo grid {dir_str} aberto na ABERTURA @ {opens[t]:.5f}. '
+                        f'Espaçamento: {espacamento:.2f} pips | '
+                        f'VR: {vr_atual:.2f} pips'
+                    )
+
+        # ── PASSO 2 — Fechamento obrigatório sexta 21h55 ──────────────────────
         if verificar_fechamento_sexta(dt) and grid_ativo is not None:
             trade = grid_ativo.fechar(close, 'SEXTA', t)
             capital += trade['pnl_usd']
@@ -215,16 +241,16 @@ def rodar_backtest_grid(
                 )
             grid_ativo = None
 
-        # ── PASSO 2 — Gerenciar grid ativo ───────────────────────────────────
+        # ── PASSO 3 — Gerenciar grid ativo ───────────────────────────────────
         if grid_ativo is not None:
 
-            # 2a. Calcular VR atual e atualizar alvo ANTES de tudo
+            # 3a. Calcular VR atual e atualizar alvo ANTES de tudo
             vr_atual = calcular_vr_atual(log_returns[:t + 1], close, JANELA_VR)
 
             if vr_atual > 0.0:
                 grid_ativo.atualizar_alvo(vr_atual, params['mult_alvo'])
 
-            # 2b. Verificar alvo PRIMEIRO (fecha antes de abrir novos níveis)
+            # 3b. Verificar alvo PRIMEIRO (fecha antes de abrir novos níveis)
             alvo_ok, preco_saida = verificar_alvo(grid_ativo, high, low)
             if alvo_ok:
                 trade = grid_ativo.fechar(preco_saida, 'ALVO', t)
@@ -239,19 +265,24 @@ def rodar_backtest_grid(
                     )
                 grid_ativo = None
 
-            # 2c. Grid ainda ativo → verificar novos preenchimentos
+            # 3c. Grid ainda ativo → verificar novos preenchimentos
             elif grid_ativo is not None:
-                novos = verificar_preenchimentos(
+                n_novos = verificar_preenchimentos(
                     grid_ativo, high, low, t, LOT_SIZE
                 )
-                if novos > 0 and verbose:
+                if n_novos > 0 and verbose:
                     logger.info(
-                        f'[{dt}] {novos} novo(s) nível(eis) preenchido(s). '
+                        f'[{dt}] {n_novos} novo(s) nível(eis) preenchido(s). '
                         f'Total ordens: {grid_ativo.n_ordens} | '
                         f'Preço médio: {grid_ativo.preco_medio:.5f}'
                     )
 
-                # 2d. Verificar stop híbrido após preenchimentos
+                # 3d. Se houve novos preenchimentos, recalcular alvo
+                #     com o novo preço médio antes de verificar o stop
+                if n_novos > 0 and vr_atual > 0.0:
+                    grid_ativo.atualizar_alvo(vr_atual, params['mult_alvo'])
+
+                # 3e. Verificar stop híbrido com alvo e preço médio atualizados
                 if vr_atual > 0.0:
                     stop_dd = calcular_stop_drawdown_pips(
                         vr_atual, params['mult_stop'], grid_ativo.n_ordens
@@ -274,31 +305,6 @@ def rodar_backtest_grid(
                             f'{trade["n_ordens"]} ordens'
                         )
                     grid_ativo = None
-
-        # ── PASSO 3 — Verificar novo gatilho (sem grid ativo) ────────────────
-        if grid_ativo is None and sinais[t] != 0:
-            vr_atual = calcular_vr_atual(log_returns[:t + 1], close, JANELA_VR)
-            if vr_atual > 0.0:
-                espacamento = calcular_espacamento_pips(
-                    vr_atual, params['mult_espacamento']
-                )
-                grid_ativo = GridState(
-                    direcao=sinais[t],
-                    preco_inicial=close,
-                    lot_size=LOT_SIZE,
-                    espacamento_pips=espacamento,
-                    vr_abertura=vr_atual,
-                    candle_idx=t,
-                )
-                # Calcular alvo inicial logo após abertura
-                grid_ativo.atualizar_alvo(vr_atual, params['mult_alvo'])
-                if verbose:
-                    dir_str = 'COMPRA' if sinais[t] == 1 else 'VENDA'
-                    logger.info(
-                        f'[{dt}] Novo grid {dir_str} aberto @ {close:.5f}. '
-                        f'Espaçamento: {espacamento:.2f} pips | '
-                        f'VR: {vr_atual:.2f} pips'
-                    )
 
         # ── PASSO 4 — Atualizar equity curve ─────────────────────────────────
         pnl_flutuante = 0.0
@@ -593,6 +599,406 @@ def gerar_grafico_backtest(
     plt.savefig(caminho_saida, dpi=150, bbox_inches='tight', facecolor='#0D1117')
     plt.close()
     logger.info(f'Gráfico salvo em: {caminho_saida.resolve()}')
+# ─────────────────────────────────────────────────────────────────────────────
+# Funções adicionais de exportação (Novos Requisitos)
+# ─────────────────────────────────────────────────────────────────────────────
+
+def gerar_curva_capital_simples(
+    resultado: dict,
+    tipo_grid: int,
+    params: dict,
+    caminho_saida: Path,
+    df: pd.DataFrame
+):
+    """
+    Gera um PNG simples com a curva de capital e drawdown abaixo (2 painéis).
+    Adaptado de gerar_equity_curve.py.
+    """
+    logger.info(f'Gerando PNG simples da curva de capital em {caminho_saida} ...')
+    caminho_saida.parent.mkdir(parents=True, exist_ok=True)
+
+    import matplotlib.ticker as mticker
+    import matplotlib.dates as mdates
+
+    trades = resultado['trades']
+    equity_curve = resultado['equity_curve']
+    pnl_total = resultado['pnl_total_usd']
+    pnl_pct = resultado['pnl_pct']
+    win_rate = resultado['win_rate']
+    mdd = resultado['max_drawdown_pct']
+    sharpe = resultado['sharpe']
+    pf = resultado['profit_factor']
+    total_grids = resultado['total_grids']
+
+    timestamps = df.index[:len(equity_curve)]
+    eq_series = pd.Series(equity_curve, index=timestamps, dtype=float)
+    peak = eq_series.cummax()
+    dd_pct = ((eq_series - peak) / peak) * 100.0
+
+    plt.style.use('dark_background')
+    fig, (ax_eq, ax_dd) = plt.subplots(
+        2, 1, figsize=(18, 9),
+        gridspec_kw={"height_ratios": [0.68, 0.32]},
+        sharex=True,
+    )
+    fig.patch.set_facecolor("#0D1117")
+    ax_eq.set_facecolor("#161B22")
+    ax_dd.set_facecolor("#161B22")
+
+    # Equity Curve
+    ax_eq.plot(timestamps, eq_series.values, color="#58A6FF", linewidth=1.2, zorder=3, label="Equity")
+    ax_eq.axhline(CAPITAL_INICIAL, color="#FFFFFF", linestyle="--", linewidth=0.8, alpha=0.4, label=f"Capital inicial ${CAPITAL_INICIAL:,.0f}")
+
+    # Fill verde acima / vermelho abaixo
+    ax_eq.fill_between(timestamps, eq_series.values, CAPITAL_INICIAL,
+                       where=(eq_series.values >= CAPITAL_INICIAL),
+                       color="#00E676", alpha=0.10, interpolate=True)
+    ax_eq.fill_between(timestamps, eq_series.values, CAPITAL_INICIAL,
+                       where=(eq_series.values < CAPITAL_INICIAL),
+                       color="#FF1744", alpha=0.10, interpolate=True)
+
+    # Pontos de trades
+    for tr in trades:
+        ci = tr["candle_fim"]
+        if ci >= len(timestamps):
+            continue
+        ts = timestamps[ci]
+        eq = equity_curve[ci]
+        cor = "#00E676" if tr["pnl_usd"] > 0 else "#FF1744"
+        ax_eq.scatter(ts, eq, s=10, color=cor, zorder=4, alpha=0.65, linewidths=0)
+
+    # Métricas formatadas na caixa de texto do gráfico
+    metricas_txt = (
+        f"PnL Total: ${pnl_total:+,.2f} ({pnl_pct:+.2f}%)   |   "
+        f"Trades: {total_grids:,}   |   Win Rate: {win_rate:.1f}%   |   "
+        f"PF: {pf:.2f}   |   Sharpe: {sharpe:.2f}   |   MDD: {mdd:.1f}%"
+    )
+    ax_eq.text(
+        0.01, 0.97, metricas_txt,
+        transform=ax_eq.transAxes,
+        fontsize=9.5, color="#ECEFF1",
+        va="top", ha="left",
+        bbox=dict(facecolor="#21262D", edgecolor="#30363D", boxstyle="round,pad=0.4", alpha=0.85),
+    )
+
+    ax_eq.set_ylabel("Equity (USD)", fontsize=11, color="#8B949E")
+    ax_eq.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"${x:,.0f}"))
+    ax_eq.grid(True, linestyle="--", alpha=0.08, color="#58A6FF")
+    ax_eq.legend(loc="lower right", framealpha=0.25, fontsize=9)
+    ax_eq.tick_params(colors="#8B949E")
+    ax_eq.spines[:].set_color("#30363D")
+
+    # Linhas de anos
+    for ano in range(df.index[0].year, df.index[-1].year + 1):
+        ts_ano = pd.Timestamp(f"{ano}-01-01")
+        if ts_ano > timestamps[-1]:
+            break
+        ax_eq.axvline(ts_ano, color="#30363D", linewidth=0.6, zorder=1)
+        ax_eq.text(ts_ano, ax_eq.get_ylim()[0] if ax_eq.get_ylim()[0] else CAPITAL_INICIAL * 0.9,
+                   str(ano), color="#8B949E", fontsize=8, va="bottom", ha="left")
+
+    # Drawdown
+    ax_dd.fill_between(timestamps, dd_pct.values, 0, color="#FF1744", alpha=0.25, interpolate=True)
+    ax_dd.plot(timestamps, dd_pct.values, color="#FF1744", linewidth=0.8)
+    ax_dd.set_ylabel("Drawdown (%)", fontsize=11, color="#8B949E")
+    ax_dd.yaxis.set_major_formatter(mticker.FuncFormatter(lambda x, _: f"{x:.0f}%"))
+    ax_dd.grid(True, linestyle="--", alpha=0.08, color="#FF1744")
+    ax_dd.tick_params(colors="#8B949E")
+    ax_dd.spines[:].set_color("#30363D")
+
+    ax_dd.xaxis.set_major_locator(mdates.YearLocator())
+    ax_dd.xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
+    ax_dd.xaxis.set_minor_locator(mdates.MonthLocator(bymonth=[4, 7, 10]))
+    plt.setp(ax_dd.xaxis.get_majorticklabels(), color="#8B949E", fontsize=9)
+
+    nomes_gatilhos = {1: 'Daily Close', 2: 'MM Slope', 3: 'Afastamento', 4: 'TWAP Band'}
+    gatilho_nome = nomes_gatilhos.get(tipo_grid, f'Grid {tipo_grid}')
+    
+    fig.suptitle(
+        f"Grid {tipo_grid} — {gatilho_nome} | Curva de Capital | 2016–2023",
+        fontsize=15, fontweight="bold", color="#ECEFF1", y=0.99,
+    )
+    plt.tight_layout(rect=[0, 0, 1, 0.98])
+    plt.subplots_adjust(hspace=0.06)
+
+    plt.savefig(caminho_saida, dpi=160, bbox_inches="tight", facecolor="#0D1117")
+    plt.close()
+    logger.info(f"Curva de capital simples salva em: {caminho_saida.resolve()}")
+
+
+def salvar_metricas_txt(resultado: dict, caminho_saida: Path):
+    """
+    Exporta o relatório detalhado de métricas de backtest para um arquivo de texto.
+    """
+    logger.info(f'Salvando métricas formatadas em {caminho_saida} ...')
+    caminho_saida.parent.mkdir(parents=True, exist_ok=True)
+
+    capital_inicial = CAPITAL_INICIAL
+    capital_final = resultado['capital_final']
+    pnl_total = resultado['pnl_total_usd']
+    pnl_pct = resultado['pnl_pct']
+    total_grids = resultado['total_grids']
+    win_rate = resultado['win_rate']
+    profit_factor = resultado['profit_factor']
+    sharpe = resultado['sharpe']
+    max_drawdown_pct = resultado['max_drawdown_pct']
+    fator_recuperacao = resultado['fator_recuperacao']
+    media_ordens = resultado['media_ordens_por_grid']
+    motivos = resultado['motivos_saida']
+
+    conteudo = f"""=====================================================
+  MÉTRICAS DO BACKTEST DO ROBÔ (GRID TRADING)
+=====================================================
+Capital Inicial:               ${capital_inicial:,.2f}
+Capital Final:                 ${capital_final:,.2f}
+PnL Total:                     ${pnl_total:+,.2f} ({pnl_pct:+.2f}%)
+Total de Trades (Grids):       {total_grids:,}
+Win Rate:                      {win_rate:.2f}%
+Profit Factor:                 {profit_factor:.2f}
+Sharpe Ratio (anualizado H1):  {sharpe:.2f}
+Max Drawdown:                  {max_drawdown_pct:.2f}%
+Fator de Recuperação:          {fator_recuperacao:.2f}
+Média Ordens/Grid:             {media_ordens:.2f}
+
+DETALHAMENTO DAS SAÍDAS POR MOTIVO:
+-----------------------------------------------------
+Saídas por ALVO:               {motivos.get('ALVO', 0)}
+Saídas por DRAWDOWN:           {motivos.get('DRAWDOWN', 0)}
+Saídas por TEMPO:              {motivos.get('TEMPO', 0)}
+Saídas por SEXTA:              {motivos.get('SEXTA', 0)}
+Saídas por FIM_SERIE:          {motivos.get('FIM_SERIE', 0)}
+=====================================================
+"""
+    with open(caminho_saida, 'w', encoding='utf-8') as f:
+        f.write(conteudo)
+    logger.info(f"Relatório de métricas salvo com sucesso em: {caminho_saida.resolve()}")
+
+
+def gerar_candles_ultimo_mes_html(resultado: dict, df: pd.DataFrame, caminho_saida: Path):
+    """
+    Gera um gráfico interativo em HTML usando Plotly contendo APENAS o último mês
+    de dados em formato CANDLES, mostrando detalhadamente as entradas, saídas,
+    níveis de grade e preço médio dos grids ativos nesse período.
+    """
+    logger.info(f'Gerando gráfico interativo HTML de candles (último mês) em {caminho_saida} ...')
+    caminho_saida.parent.mkdir(parents=True, exist_ok=True)
+
+    import plotly.graph_objects as go
+
+    # Filtrar dados do último mês com base na data final da série
+    data_fim = df.index[-1]
+    data_inicio = data_fim - pd.Timedelta(days=30)
+    df_mes = df[df.index >= data_inicio]
+
+    if len(df_mes) == 0:
+        logger.warning("Nenhum data encontrada para o último mês de candles!")
+        return
+
+    # Criar figura com o gráfico de velas
+    fig = go.Figure()
+
+    # Adicionar velas (Candlesticks)
+    fig.add_trace(go.Candlestick(
+        x=df_mes.index,
+        open=df_mes['Open'],
+        high=df_mes['High'],
+        low=df_mes['Low'],
+        close=df_mes['Close'],
+        name='Preço (Candles)',
+        increasing_line_color='#00E676',
+        increasing_fillcolor='#00E676',
+        decreasing_line_color='#FF1744',
+        decreasing_fillcolor='#FF1744',
+        line_width=1,
+    ))
+
+    # Controlar legendas duplicadas
+    adicionou_legenda = {
+        'preco_medio': False,
+        'nivel_compra': False,
+        'nivel_venda': False,
+        'abertura_compra': False,
+        'abertura_venda': False,
+        'saida_lucro': False,
+        'saida_perda': False,
+    }
+
+    trades = resultado['trades']
+
+    # Iterar sobre todos os trades do backtest
+    for idx, tr in enumerate(trades):
+        # Índices de candles inicial e final
+        ci = tr['candle_inicio']
+        cf = tr['candle_fim']
+
+        if ci >= len(df) or cf >= len(df):
+            continue
+
+        ts_inicio = df.index[ci]
+        ts_fim = df.index[cf]
+
+        # Verificar se o trade ocorreu (total ou parcialmente) no último mês
+        if ts_fim < data_inicio or ts_inicio > data_fim:
+            continue
+
+        # Restringir o desenho visual aos limites do gráfico de 30 dias para evitar esticar demais
+        ts_inicio_plot = max(ts_inicio, data_inicio)
+        ts_fim_plot = min(ts_fim, data_fim)
+
+        direcao = tr['direcao']
+        is_compra = direcao == 1
+        cor_grid = '#00E676' if is_compra else '#FF1744'
+        motivo_saida = tr['motivo_saida']
+        pnl_usd = tr['pnl_usd']
+        n_ordens = tr['n_ordens']
+        p_medio = tr['preco_medio_entrada']
+        p_saida = tr['preco_saida']
+
+        # 1. Preço médio
+        show_leg = not adicionou_legenda['preco_medio']
+        adicionou_legenda['preco_medio'] = True
+        fig.add_trace(go.Scatter(
+            x=[ts_inicio_plot, ts_fim_plot],
+            y=[p_medio, p_medio],
+            mode='lines',
+            line=dict(color='#FF9800', width=1.5, dash='dash'),
+            name='Preço Médio',
+            legendgroup='preco_medio',
+            showlegend=show_leg,
+            hoverinfo='skip'
+        ))
+
+        # 2. Níveis preenchidos
+        tipo_nivel = 'nivel_compra' if is_compra else 'nivel_venda'
+        nome_nivel = 'Níveis de Compra' if is_compra else 'Níveis de Venda'
+        show_leg_nivel = not adicionou_legenda[tipo_nivel]
+        adicionou_legenda[tipo_nivel] = True
+
+        for lvl in tr.get('niveis_ativados', []):
+            fig.add_trace(go.Scatter(
+                x=[ts_inicio_plot, ts_fim_plot],
+                y=[lvl, lvl],
+                mode='lines',
+                line=dict(color=cor_grid, width=0.8),
+                opacity=0.7,
+                name=nome_nivel,
+                legendgroup=tipo_nivel,
+                showlegend=show_leg_nivel,
+                hoverinfo='skip'
+            ))
+
+        # 3. Marcador de abertura (no primeiro candle do trade se estiver no gráfico)
+        if ts_inicio >= data_inicio:
+            tipo_abertura = 'abertura_compra' if is_compra else 'abertura_venda'
+            nome_abertura = 'Abertura Compra' if is_compra else 'Abertura Venda'
+            show_leg_ab = not adicionou_legenda[tipo_abertura]
+            adicionou_legenda[tipo_abertura] = True
+            
+            p_abertura = tr['niveis_ativados'][0] if tr['niveis_ativados'] else p_medio
+            fig.add_trace(go.Scatter(
+                x=[ts_inicio],
+                y=[p_abertura],
+                mode='markers',
+                marker=dict(symbol='triangle-up' if is_compra else 'triangle-down', size=10, color=cor_grid),
+                name=nome_abertura,
+                legendgroup=tipo_abertura,
+                showlegend=show_leg_ab,
+                hovertemplate=(
+                    f"<b>Abertura Grid #{idx+1}</b><br>"
+                    f"Direção: {'COMPRA' if is_compra else 'VENDA'}<br>"
+                    f"Preço Entrada: %{{y:.5f}}<br>"
+                    f"Data/Hora: {ts_inicio.strftime('%Y-%m-%d %H:%M')}<extra></extra>"
+                )
+            ))
+
+        # 4. Marcador de fechamento (se estiver no gráfico)
+        if ts_fim >= data_inicio:
+            lucro = pnl_usd > 0
+            tipo_saida = 'saida_lucro' if lucro else 'saida_perda'
+            nome_saida = 'Saída com Lucro' if lucro else 'Saída com Perda'
+            show_leg_sd = not adicionou_legenda[tipo_saida]
+            adicionou_legenda[tipo_saida] = True
+
+            cor_saida = '#00E676' if lucro else '#FF1744'
+            simbolo_saida = 'star' if lucro else 'x'
+            tamanho_saida = 12 if lucro else 9
+
+            fig.add_trace(go.Scatter(
+                x=[ts_fim],
+                y=[p_saida],
+                mode='markers',
+                marker=dict(
+                    symbol=simbolo_saida,
+                    size=tamanho_saida,
+                    color=cor_saida,
+                    line=dict(width=1, color='white')
+                ),
+                name=nome_saida,
+                legendgroup=tipo_saida,
+                showlegend=show_leg_sd,
+                hovertemplate=(
+                    f"<b>Fechamento Grid #{idx+1}</b><br>"
+                    f"Direção: {'COMPRA' if is_compra else 'VENDA'}<br>"
+                    f"Motivo Saída: {motivo_saida}<br>"
+                    f"Nº Ordens Preenchidas: {n_ordens}<br>"
+                    f"PnL: ${pnl_usd:+,.2f} ({tr['pnl_pips']:+.1f} pips)<br>"
+                    f"Data/Hora: {ts_fim.strftime('%Y-%m-%d %H:%M')}<extra></extra>"
+                )
+            ))
+
+    # Atualizações no layout para visualização dark premium
+    fig.update_layout(
+        title=dict(
+            text=f"<b>Visualização Candle-a-Candle (Últimos 30 dias)</b><br>Interações de entrada, saída e preço médio no gráfico de velas",
+            font=dict(size=18, color='#ECEFF1'),
+            x=0.5
+        ),
+        paper_bgcolor="#0D1117",
+        plot_bgcolor="#161B22",
+        font=dict(color="#ECEFF1", family="Inter, Arial, sans-serif", size=12),
+        hovermode="x unified",
+        height=800,
+        margin=dict(l=60, r=40, t=90, b=60),
+        xaxis=dict(
+            gridcolor="#21262D",
+            zerolinecolor="#30363D",
+            tickfont=dict(color="#8B949E"),
+            title_font=dict(color="#8B949E"),
+            rangeslider=dict(visible=False), # Desativar rangeslider para focar no gráfico de velas
+            title_text="Data / Hora (Servidor MT5)"
+        ),
+        yaxis=dict(
+            gridcolor="#21262D",
+            zerolinecolor="#30363D",
+            tickfont=dict(color="#8B949E"),
+            title_font=dict(color="#8B949E"),
+            title_text="Preço EURUSD",
+            tickformat=".5f"
+        ),
+        legend=dict(
+            bgcolor="rgba(22,27,34,0.85)",
+            bordercolor="#30363D",
+            borderwidth=1,
+            x=0.01,
+            y=0.99,
+            font=dict(size=10)
+        )
+    )
+
+    # Escrever arquivo HTML autônomo (Plotly offline embutido)
+    fig.write_html(
+        str(caminho_saida),
+        include_plotlyjs=True,
+        full_html=True,
+        config={
+            "scrollZoom": True,
+            "displayModeBar": True,
+            "toImageButtonOptions": {
+                "format": "png", "filename": "candles_ultimo_mes", "scale": 2
+            }
+        }
+    )
+    logger.info(f"Gráfico HTML interativo de velas salvo em: {caminho_saida.resolve()}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -668,7 +1074,50 @@ if __name__ == '__main__':
     print(f'  Motivos de Saída:      {resultado["motivos_saida"]}')
     print(f'{sep}\n')
 
-    # ── Gráfico ────────────────────────────────────────────────────────────────
-    DIR_GRAFICOS.mkdir(parents=True, exist_ok=True)
-    caminho_grafico = DIR_GRAFICOS / f'grid_{args.grid}_{args.parquet}_backtest.png'
-    gerar_grafico_backtest(resultado, args.grid, params_padrao, caminho_grafico, df=df_raw)
+    # ── Geração Dinâmica de Diretório de Saída ─────────────────────────────────
+    # Determinar nome do ativo com base no arquivo parquet
+    partes = parquet_path.stem.split('_')
+    ativo_str = partes[0].upper()
+    if len(partes) > 1 and partes[1].upper() in ['H1', 'M15', 'M30', 'H4', 'D1']:
+        ativo_str = f"{ativo_str}_{partes[1].upper()}"
+
+    # Determinar nome do gatilho com base no grid
+    nomes_gatilhos = {
+        1: 'daily_close',
+        2: 'mm_slope',
+        3: 'afastamento',
+        4: 'twap_band'
+    }
+    gatilho_nome = nomes_gatilhos.get(args.grid, f'grid_{args.grid}')
+    
+    # Criar pasta final de destino
+    diretorio_saida = DIR_GRID / "resultados" / f"{ativo_str}_{gatilho_nome}"
+    diretorio_saida.mkdir(parents=True, exist_ok=True)
+    logger.info(f"Diretório de destino das saídas: {diretorio_saida.resolve()}")
+
+    # ── Exportar os 4 Arquivos Solicitados ──────────────────────────────────────
+    # 1. analise_completa.png (Foto 1 - 4 painéis)
+    caminho_analise = diretorio_saida / "analise_completa.png"
+    gerar_grafico_backtest(resultado, args.grid, params_padrao, caminho_analise, df=df_raw)
+
+    # 2. curva_capital.png (Foto 2 - curva simples)
+    caminho_curva = diretorio_saida / "curva_capital.png"
+    gerar_curva_capital_simples(resultado, args.grid, params_padrao, caminho_curva, df=df_raw)
+
+    # 3. candles_ultimo_mes.html (Foto 3 - candles interativo)
+    caminho_candles = diretorio_saida / "candles_ultimo_mes.html"
+    gerar_candles_ultimo_mes_html(resultado, df_raw, caminho_candles)
+
+    # 4. metricas.txt (Métricas detalhadas)
+    caminho_metricas = diretorio_saida / "metricas.txt"
+    salvar_metricas_txt(resultado, caminho_metricas)
+
+    print(f"\n{sep}")
+    print("  BACKTEST CONCLUÍDO E ARQUIVOS EXPORTADOS COM SUCESSO:")
+    print(f"  Pasta de Destino: {diretorio_saida.resolve()}")
+    print("-----------------------------------------------------")
+    print(f"  1. Análise de 4 painéis     : {caminho_analise.name}")
+    print(f"  2. Curva de capital simples : {caminho_curva.name}")
+    print(f"  3. Velas interativo HTML   : {caminho_candles.name}")
+    print(f"  4. Relatório de Métricas    : {caminho_metricas.name}")
+    print(f"{sep}\n")

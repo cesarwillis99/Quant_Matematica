@@ -1,0 +1,22 @@
+=====================================================
+  MÉTRICAS DO BACKTEST DO ROBÔ (GRID TRADING)
+=====================================================
+Capital Inicial:               $10,000.00
+Capital Final:                 $13,802.63
+PnL Total:                     $+3,802.63 (+38.03%)
+Total de Trades (Grids):       1,269
+Win Rate:                      96.38%
+Profit Factor:                 1.08
+Sharpe Ratio (anualizado H1):  0.29
+Max Drawdown:                  63.66%
+Fator de Recuperação:          0.48
+Média Ordens/Grid:             2.84
+
+DETALHAMENTO DAS SAÍDAS POR MOTIVO:
+-----------------------------------------------------
+Saídas por ALVO:               1223
+Saídas por DRAWDOWN:           16
+Saídas por TEMPO:              30
+Saídas por SEXTA:              0
+Saídas por FIM_SERIE:          0
+=====================================================
