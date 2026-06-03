@@ -12,9 +12,15 @@ import pandas as pd
 import numpy as np
 from pathlib import Path
 
-from quant_grid.config import PARQUET_COMPLETO, DIR_OTIM, CAPITAL_INICIAL
+from quant_grid.config import PARQUET_COMPLETO, DIR_OTIM, CAPITAL_INICIAL, DIR_GRID
 from quant_grid.gatilhos.gatilho_daily_close import gerar_sinal_daily_close
-from quant_grid.run_backtest_grid import rodar_backtest_grid
+from quant_grid.run_backtest_grid import (
+    rodar_backtest_grid,
+    gerar_grafico_backtest,
+    gerar_curva_capital_simples,
+    gerar_candles_ultimo_mes_html,
+    salvar_metricas_txt,
+)
 
 # Configuração do Logger
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -114,12 +120,12 @@ def rodar_otimizacao_grid1():
     df_res.to_parquet(caminho_parquet, engine="pyarrow", compression="snappy")
     logger.info(f"Parquet completo com {len(df_res)} combinações salvas em: {caminho_parquet}")
     
-    # Top 10
-    top10_df = df_res.head(10)
-    top10_lista = []
+    # Top 30
+    top30_df = df_res.head(30)
+    top30_lista = []
     
-    for idx, row in top10_df.iterrows():
-        top10_lista.append({
+    for idx, row in top30_df.iterrows():
+        top30_lista.append({
             "id": f"GRID1_TOP{idx + 1}",
             "tipo_grid": 1,
             "pct_gatilho": float(row['pct_gatilho']),
@@ -135,21 +141,76 @@ def rodar_otimizacao_grid1():
             "sharpe": float(row['sharpe'])
         })
         
-    # Salvar JSON Top 10
-    caminho_json = DIR_OTIM / "otimizacao_grid1_top10.json"
+    # Salvar JSON Top 30
+    caminho_json = DIR_OTIM / "otimizacao_grid1_top30.json"
     with open(caminho_json, 'w', encoding='utf-8') as f:
-        json.dump(top10_lista, f, indent=4, ensure_ascii=False)
-    logger.info(f"JSON Top 10 salvo em: {caminho_json}")
+        json.dump(top30_lista, f, indent=4, ensure_ascii=False)
+    logger.info(f"JSON Top 30 salvo em: {caminho_json}")
     
     # Exibir Tabela no Terminal
     print("\n" + "═"*115)
-    print(" " * 45 + "TABELA TOP 10 OTIMIZAÇÃO GRID 1")
+    print(" " * 45 + "TABELA TOP 30 OTIMIZAÇÃO GRID 1")
     print("═"*115)
     print(f"{'Rank':<5}{'Gatilho':<10}{'Mult Esp.':<11}{'Mult Alvo':<11}{'Mult Stop':<11}{'Stop Cand.':<12}{'N Grids':<9}{'WinRate':<9}{'ProfitF.':<10}{'FatRecup.':<11}{'Sharpe':<8}")
     print("─"*115)
-    for idx, item in enumerate(top10_lista):
+    for idx, item in enumerate(top30_lista):
         print(f"#{idx+1:<4}{item['pct_gatilho']:<10.3f}{item['mult_espacamento']:<11.1f}{item['mult_alvo']:<11.1f}{item['mult_stop']:<11.1f}{item['stop_candles']:<12}{item['total_grids']:<9}{item['win_rate']:<9.1f}%{item['profit_factor']:<10.2f}{item['fator_recuperacao']:<11.2f}{item['sharpe']:<8.2f}")
     print("═"*115 + "\n")
+
+    # ── Geração Dinâmica das subpastas do Ranking (Novo Requisito) ──────────────
+    logger.info("Gerando as subpastas ranking_X com os 4 arquivos de backtest...")
+    
+    # Determinar nome do ativo com base no arquivo parquet
+    partes = PARQUET_COMPLETO.stem.split('_')
+    ativo_str = partes[0].upper()
+    if len(partes) > 1 and (*partes,)[1].upper() in ['H1', 'M15', 'M30', 'H4', 'D1']:
+        ativo_str = f"{ativo_str}_{partes[1].upper()}"
+        
+    pasta_resultados_base = DIR_GRID / "resultados" / f"{ativo_str}_daily_close"
+    
+    for idx, item in enumerate(top30_lista):
+        rank_num = idx + 1
+        logger.info(f"Gerando arquivos para ranking_{rank_num}/30...")
+        
+        # Parâmetros dessa linha do ranking
+        params_rank = {
+            'pct_gatilho':      item['pct_gatilho'],
+            'mult_espacamento': item['mult_espacamento'],
+            'mult_alvo':        item['mult_alvo'],
+            'mult_stop':        item['mult_stop'],
+            'stop_candles':     item['stop_candles'],
+        }
+        
+        # Gera o sinal correspondente
+        df_sinalizado = gerar_sinal_daily_close(df, pct_gatilho=params_rank['pct_gatilho'])
+        
+        # Rodar o backtest completo
+        res = rodar_backtest_grid(
+            df_sinalizado,
+            tipo_grid=1,
+            params=params_rank,
+            capital_inicial=CAPITAL_INICIAL,
+            verbose=False
+        )
+        
+        # Pasta de destino: quant_grid/resultados/{ativo}_{gatilho}/ranking_{i}/
+        pasta_ranking = pasta_resultados_base / f"ranking_{rank_num}"
+        pasta_ranking.mkdir(parents=True, exist_ok=True)
+        
+        # Salvar os 4 arquivos na subpasta
+        # 1. analise_completa.png
+        gerar_grafico_backtest(res, 1, params_rank, pasta_ranking / "analise_completa.png", df=df_sinalizado)
+        
+        # 2. curva_capital.png
+        gerar_curva_capital_simples(res, 1, params_rank, pasta_ranking / "curva_capital.png", df=df_sinalizado)
+        
+        # 3. candles_ultimo_mes.html
+        gerar_candles_ultimo_mes_html(res, df_sinalizado, pasta_ranking / "candles_ultimo_mes.html")
+        
+        # 4. metricas.txt
+        salvar_metricas_txt(res, pasta_ranking / "metricas.txt")
+        
+    logger.info(f"Ranking concluído! As 30 pastas de ranking foram criadas em: {pasta_resultados_base.resolve()}")
 
 if __name__ == "__main__":
     rodar_otimizacao_grid1()
